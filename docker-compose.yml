@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fisher
+      POSTGRES_PASSWORD: fisher
+      POSTGRES_DB: fisher_mapper
+    ports:
+      - "5432:5432"
+    volumes:
+      - fisher_mapper_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fisher -d fisher_mapper"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # asynqmon: queue inspection UI. Not required to be running for Phase 1
+  # validation, but cheap to have on hand once the worker/task layer
+  # (Phase 3) exists. Basic-auth wrapping happens in Phase 3 before this
+  # is exposed anywhere but localhost.
+  asynqmon:
+    image: hibiken/asynqmon:latest
+    restart: unless-stopped
+    depends_on:
+      - redis
+    environment:
+      REDIS_ADDR: "redis:6379"
+    ports:
+      - "8081:8080"
+
+volumes:
+  fisher_mapper_postgres_data:

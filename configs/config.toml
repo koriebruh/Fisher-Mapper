@@ -1,0 +1,18 @@
+# Bootstrap config — loaded after hardcoded defaults, before env var
+# overrides (APP_POSTGRES_DSN, APP_REDIS_ADDR, APP_HTTP_PORT, APP_LOG_LEVEL).
+#
+# This file MUST only contain values needed before any connection exists.
+# Anything else (feature flags, retry counts, provider toggles) belongs in
+# the Postgres app_config table (dynamic config, loaded after DB connect).
+
+[postgres]
+dsn = "postgres://fisher:fisher@localhost:5432/fisher_mapper?sslmode=disable"
+
+[redis]
+addr = "localhost:6379"
+
+[http]
+port = 8080
+
+[log]
+level = "info"
