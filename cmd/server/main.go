@@ -1,12 +1,14 @@
-// Command server is the Phase 1 walking skeleton: bootstrap config, a
-// Postgres pool, a Redis-backed asynq client, and a single fiber HTTP
-// server exposing /healthz and /readyz — wired as oklog/run actors with a
-// signal handler so shutdown is deterministic.
+// Command server bootstraps config, a Postgres pool, a Redis-backed asynq
+// client, the PJP provider registry, the payment domain service, and a
+// single fiber HTTP server exposing /healthz, /readyz, and (Phase 2)
+// POST /payments — wired as oklog/run actors with a signal handler so
+// shutdown is deterministic.
 //
 // Startup order (per plan "Prinsip Arsitektur Dasar"):
 //
 //	bootstrap config -> observability (logger+tracer) -> connect Postgres ->
-//	connect Redis -> register transport -> run actors
+//	connect Redis -> register providers/domain services -> register transport
+//	-> run actors
 package main
 
 import (
@@ -23,6 +25,8 @@ import (
 	"Fisher-Mapper/internal/bootstrap"
 	"Fisher-Mapper/internal/config"
 	"Fisher-Mapper/internal/db"
+	"Fisher-Mapper/internal/domain/payment"
+	"Fisher-Mapper/internal/idempotency"
 	"Fisher-Mapper/internal/lifecycle"
 	"Fisher-Mapper/internal/queue"
 	"Fisher-Mapper/internal/transport/rest"
@@ -85,10 +89,18 @@ func run_() error {
 		logger.Info("connected to redis")
 	}
 
-	// 5. Transport: single fiber app with health endpoints.
+	// 5. Domain wiring: providers (explicit registry, no blank import),
+	// idempotency store, payment repository/service.
+	providers := bootstrap.RegisterProviders()
+	idemStore := idempotency.NewPGStore(pool)
+	paymentRepo := payment.NewPGRepository(pool)
+	paymentService := payment.NewService(paymentRepo, idemStore, providers)
+
+	// 6. Transport: single fiber app with health + payment endpoints.
 	app := rest.NewApp(rest.Deps{
-		Pool:        pool,
-		QueueClient: queueClient,
+		Pool:           pool,
+		QueueClient:    queueClient,
+		PaymentService: paymentService,
 	})
 
 	addr := fmt.Sprintf(":%d", cfg.HTTP.Port)

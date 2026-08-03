@@ -16,6 +16,8 @@ import (
 
 	"Fisher-Mapper/internal/config"
 	"Fisher-Mapper/internal/observability"
+	"Fisher-Mapper/internal/provider"
+	"Fisher-Mapper/internal/provider/mock"
 )
 
 // Observability bundles what Register produces so main() can use the
@@ -47,4 +49,16 @@ func RegisterObservability(ctx context.Context, cfg config.Bootstrap, serviceNam
 		Logger:         logger,
 		ShutdownTracer: shutdownTracer,
 	}, nil
+}
+
+// RegisterProviders builds the PJP provider registry and registers every
+// provider explicitly, by name, via provider.Registry.Register — never via
+// `import _ "package"` for an init() side effect, per the project's
+// no-blank-import rule. Mock is the only real provider in Phase 2 (plan:
+// "PJP: mock-only dulu"); real PJPs register here the same way once
+// implemented.
+func RegisterProviders() *provider.Registry {
+	registry := provider.NewRegistry()
+	registry.Register("mock", mock.New(mock.Config{Name: "mock"}))
+	return registry
 }

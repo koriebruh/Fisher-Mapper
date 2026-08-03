@@ -10,22 +10,30 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"Fisher-Mapper/internal/domain/payment"
 	"Fisher-Mapper/internal/queue"
 )
 
-// Deps are the dependencies health checks need to report readiness.
+// Deps are the dependencies the REST transport needs across all route
+// groups. Phase 1 only used Pool/QueueClient (health checks); Phase 2 adds
+// PaymentService for the create-payment endpoint. Kept as one struct since
+// main() wires everything at once into a single fiber.App.
 type Deps struct {
-	Pool        *pgxpool.Pool
-	QueueClient *asynq.Client
+	Pool           *pgxpool.Pool
+	QueueClient    *asynq.Client
+	PaymentService *payment.Service
 }
 
-// NewApp builds the fiber app and registers the Phase 1 routes.
+// NewApp builds the fiber app and registers all routes.
 func NewApp(deps Deps) *fiber.App {
 	app := fiber.New(fiber.Config{
 		DisableStartupMessage: true,
 	})
 
 	RegisterHealthRoutes(app, deps)
+	if deps.PaymentService != nil {
+		RegisterPaymentRoutes(app, PaymentDeps{Service: deps.PaymentService})
+	}
 
 	return app
 }

@@ -1,0 +1,227 @@
+package payment
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"Fisher-Mapper/internal/apperror"
+)
+
+// TransitionParams bundles the arguments for Repository.ApplyTransition.
+type TransitionParams struct {
+	PaymentID uuid.UUID
+	To        Status
+	EventTS   time.Time
+	EventType string
+	Provider  string
+
+	// ProviderRef, if non-nil, is written to payments.provider_ref as part
+	// of the same update (e.g. the reference the provider assigned on the
+	// call that drove this transition).
+	ProviderRef *string
+
+	// ProviderEventID, if non-nil, is the provider's own event id — the
+	// dedup key enforced by the unique index on
+	// payment_events(provider, provider_event_id). Internally-driven
+	// transitions (e.g. pending -> processing right after we create the
+	// row) leave this nil since there is no provider event backing them.
+	ProviderEventID *string
+
+	RawPayload []byte
+}
+
+// Repository is the payment persistence interface. The pgx implementation
+// (PGRepository) is the only one that ships with Phase 2 — sqlc generation
+// was deliberately deferred (see plan report); every query here is
+// transaction-scoped control flow (BEGIN -> SELECT ... FOR UPDATE -> branch
+// in Go -> UPDATE + INSERT -> COMMIT) that sqlc does not generate for you
+// regardless.
+type Repository interface {
+	// Create inserts a new payment row in StatusPending and populates
+	// p.ID/CreatedAt/UpdatedAt/LastEventAt from the DB defaults.
+	Create(ctx context.Context, p *Payment) error
+
+	// Get fetches a payment by id.
+	Get(ctx context.Context, id uuid.UUID) (*Payment, error)
+
+	// FindByProviderRef looks up a payment by (provider, providerRef),
+	// used when applying a provider webhook event.
+	FindByProviderRef(ctx context.Context, provider, providerRef string) (*Payment, error)
+
+	// SetProviderRef persists provider_ref without changing status — used
+	// when a provider call returns a reference but the payment stays in
+	// its current state (e.g. still "processing"), so a full
+	// ApplyTransition (which would reject a same-status "transition")
+	// isn't the right tool.
+	SetProviderRef(ctx context.Context, id uuid.UUID, providerRef string) error
+
+	// ApplyTransition performs, in one transaction:
+	//  1. dedup check (if ProviderEventID is set): if an event with the
+	//     same (provider, provider_event_id) was already applied, return
+	//     apperror.CodeDuplicateEvent and change nothing.
+	//  2. SELECT status, last_event_at FROM payments WHERE id = $1 FOR
+	//     UPDATE (row lock).
+	//  3. Transition(current, params.To, params.EventTS, lastEventAt) —
+	//     returns apperror.CodeTerminalState / CodeStaleEvent /
+	//     CodeInvalidTransition without writing anything if rejected.
+	//  4. UPDATE payments (status, last_event_at, provider_ref if set).
+	//  5. INSERT INTO payment_events.
+	//  6. COMMIT.
+	ApplyTransition(ctx context.Context, params TransitionParams) error
+}
+
+// PGRepository is the pgx-backed Repository implementation.
+type PGRepository struct {
+	pool *pgxpool.Pool
+}
+
+// NewPGRepository builds a PGRepository over an existing pool.
+func NewPGRepository(pool *pgxpool.Pool) *PGRepository {
+	return &PGRepository{pool: pool}
+}
+
+func (r *PGRepository) Create(ctx context.Context, p *Payment) error {
+	const insertSQL = `
+		INSERT INTO payments (tenant_id, livemode, currency, amount, operation_type, provider, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id, status, last_event_at, created_at, updated_at`
+
+	err := r.pool.QueryRow(ctx, insertSQL,
+		p.TenantID, p.Livemode, p.Currency, p.Amount, p.OperationType, p.Provider, StatusPending,
+	).Scan(&p.ID, &p.Status, &p.LastEventAt, &p.CreatedAt, &p.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("payment: create: %w", err)
+	}
+	return nil
+}
+
+func (r *PGRepository) Get(ctx context.Context, id uuid.UUID) (*Payment, error) {
+	const selectSQL = `
+		SELECT id, tenant_id, livemode, currency, amount, operation_type, provider,
+		       provider_ref, status, last_event_at, created_at, updated_at
+		FROM payments WHERE id = $1`
+
+	p := &Payment{}
+	err := r.pool.QueryRow(ctx, selectSQL, id).Scan(
+		&p.ID, &p.TenantID, &p.Livemode, &p.Currency, &p.Amount, &p.OperationType, &p.Provider,
+		&p.ProviderRef, &p.Status, &p.LastEventAt, &p.CreatedAt, &p.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperror.New(apperror.CodeNotFound, "payment: not found")
+		}
+		return nil, fmt.Errorf("payment: get: %w", err)
+	}
+	return p, nil
+}
+
+func (r *PGRepository) FindByProviderRef(ctx context.Context, provider, providerRef string) (*Payment, error) {
+	const selectSQL = `
+		SELECT id, tenant_id, livemode, currency, amount, operation_type, provider,
+		       provider_ref, status, last_event_at, created_at, updated_at
+		FROM payments WHERE provider = $1 AND provider_ref = $2`
+
+	p := &Payment{}
+	err := r.pool.QueryRow(ctx, selectSQL, provider, providerRef).Scan(
+		&p.ID, &p.TenantID, &p.Livemode, &p.Currency, &p.Amount, &p.OperationType, &p.Provider,
+		&p.ProviderRef, &p.Status, &p.LastEventAt, &p.CreatedAt, &p.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperror.New(apperror.CodeNotFound, "payment: not found for provider ref")
+		}
+		return nil, fmt.Errorf("payment: find by provider ref: %w", err)
+	}
+	return p, nil
+}
+
+func (r *PGRepository) ApplyTransition(ctx context.Context, params TransitionParams) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("payment: apply transition: begin: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	if params.ProviderEventID != nil {
+		var exists bool
+		const dedupSQL = `SELECT EXISTS(SELECT 1 FROM payment_events WHERE provider = $1 AND provider_event_id = $2)`
+		if err := tx.QueryRow(ctx, dedupSQL, params.Provider, *params.ProviderEventID).Scan(&exists); err != nil {
+			return fmt.Errorf("payment: apply transition: dedup check: %w", err)
+		}
+		if exists {
+			return apperror.New(apperror.CodeDuplicateEvent, "payment: provider_event_id already applied")
+		}
+	}
+
+	const lockSQL = `SELECT status, last_event_at FROM payments WHERE id = $1 FOR UPDATE`
+	var current Status
+	var lastEventAt time.Time
+	if err := tx.QueryRow(ctx, lockSQL, params.PaymentID).Scan(&current, &lastEventAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return apperror.New(apperror.CodeNotFound, "payment: not found")
+		}
+		return fmt.Errorf("payment: apply transition: lock: %w", err)
+	}
+
+	if err := Transition(current, params.To, params.EventTS, lastEventAt); err != nil {
+		return err
+	}
+
+	const updateSQL = `
+		UPDATE payments
+		SET status = $1, last_event_at = $2, updated_at = now(),
+		    provider_ref = coalesce($3, provider_ref)
+		WHERE id = $4`
+	if _, err := tx.Exec(ctx, updateSQL, params.To, params.EventTS, params.ProviderRef, params.PaymentID); err != nil {
+		return fmt.Errorf("payment: apply transition: update: %w", err)
+	}
+
+	const insertEventSQL = `
+		INSERT INTO payment_events (payment_id, event_type, provider, provider_event_id, provider_event_ts, raw_payload)
+		VALUES ($1, $2, $3, $4, $5, $6)`
+	if _, err := tx.Exec(ctx, insertEventSQL,
+		params.PaymentID, params.EventType, params.Provider, params.ProviderEventID, params.EventTS, params.RawPayload,
+	); err != nil {
+		return fmt.Errorf("payment: apply transition: insert event: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("payment: apply transition: commit: %w", err)
+	}
+	return nil
+}
+
+func (r *PGRepository) SetProviderRef(ctx context.Context, id uuid.UUID, providerRef string) error {
+	const updateSQL = `UPDATE payments SET provider_ref = $1, updated_at = now() WHERE id = $2`
+	tag, err := r.pool.Exec(ctx, updateSQL, providerRef, id)
+	if err != nil {
+		return fmt.Errorf("payment: set provider ref: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return apperror.New(apperror.CodeNotFound, "payment: not found")
+	}
+	return nil
+}
+
+// Seen implements auth.DedupChecker so an HMACVerifier can be wired
+// directly against the payment_events table without the auth package
+// importing this one (it takes the interface, we satisfy it structurally).
+func (r *PGRepository) Seen(ctx context.Context, provider, providerEventID string) (bool, error) {
+	if providerEventID == "" {
+		return false, nil
+	}
+	var exists bool
+	const sql = `SELECT EXISTS(SELECT 1 FROM payment_events WHERE provider = $1 AND provider_event_id = $2)`
+	if err := r.pool.QueryRow(ctx, sql, provider, providerEventID).Scan(&exists); err != nil {
+		return false, fmt.Errorf("payment: seen: %w", err)
+	}
+	return exists, nil
+}
+
+var _ Repository = (*PGRepository)(nil)
