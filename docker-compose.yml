@@ -29,8 +29,10 @@ services:
 
   # asynqmon: queue inspection UI. Not required to be running for Phase 1
   # validation, but cheap to have on hand once the worker/task layer
-  # (Phase 3) exists. Basic-auth wrapping happens in Phase 3 before this
-  # is exposed anywhere but localhost.
+  # (Phase 3) exists. It has no built-in auth (only a Redis password option,
+  # which doesn't protect the dashboard itself), so until Phase 3 wraps it
+  # in basic-auth/JWT, the port is bound to loopback only — never expose
+  # this on a non-localhost interface without that wrapper in front of it.
   asynqmon:
     image: hibiken/asynqmon:latest
     restart: unless-stopped
@@ -39,7 +41,7 @@ services:
     environment:
       REDIS_ADDR: "redis:6379"
     ports:
-      - "8081:8080"
+      - "127.0.0.1:8081:8080"
 
 volumes:
   fisher_mapper_postgres_data:

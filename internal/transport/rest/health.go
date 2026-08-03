@@ -4,6 +4,7 @@ package rest
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/hibiken/asynq"
@@ -46,16 +47,18 @@ func RegisterHealthRoutes(app *fiber.App, deps Deps) {
 		ctx := c.Context()
 
 		if err := checkPostgres(ctx, deps.Pool); err != nil {
+			slog.Warn("readyz: postgres not ready", "error", err)
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
 				"status": "not ready",
-				"reason": "postgres: " + err.Error(),
+				"reason": "postgres",
 			})
 		}
 
 		if err := checkRedis(deps.QueueClient); err != nil {
+			slog.Warn("readyz: redis not ready", "error", err)
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
 				"status": "not ready",
-				"reason": "redis: " + err.Error(),
+				"reason": "redis",
 			})
 		}
 

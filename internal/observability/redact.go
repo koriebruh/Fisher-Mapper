@@ -6,25 +6,53 @@ import (
 	"strings"
 )
 
-// sensitiveKeys lists attribute keys (case-insensitive, exact match) whose
-// values must never reach a log sink in cleartext. This rule is wired into
-// the logger from the very start of Phase 1 — deliberately, before any
-// sensitive payload (card data, secrets, tokens) exists anywhere in the
-// codebase — so no later feature can "forget" to redact.
+// sensitiveKeys lists attribute keys (normalized: lowercased, "-" and "_"
+// stripped) whose values must never reach a log sink in cleartext. This rule
+// is wired into the logger from the very start of Phase 1 — deliberately,
+// before any sensitive payload (card data, secrets, tokens) exists anywhere
+// in the codebase — so no later feature can "forget" to redact.
 var sensitiveKeys = map[string]struct{}{
-	"card_number": {},
-	"cardnumber":  {},
-	"secret":      {},
-	"password":    {},
-	"token":       {},
-	"cvv":         {},
+	"cardnumber":    {},
+	"pan":           {},
+	"cvv":           {},
+	"cvc":           {},
+	"secret":        {},
+	"password":      {},
+	"token":         {},
+	"apikey":        {},
+	"privatekey":    {},
+	"authorization": {},
+}
+
+// sensitiveSubstrings catches compound key names (client_secret, oauth_token,
+// x-api-key, refresh-token, ...) that don't exact-match sensitiveKeys but
+// contain a marker that must never be logged in cleartext.
+var sensitiveSubstrings = []string{
+	"secret", "password", "token", "cvv", "cvc", "cardnumber", "apikey", "privatekey", "authorization",
 }
 
 const redactedValue = "[REDACTED]"
 
+// normalizeKey lowercases key and strips "-"/"_" so "Card-Number",
+// "card_number" and "CardNumber" all compare equal.
+func normalizeKey(key string) string {
+	key = strings.ToLower(key)
+	key = strings.ReplaceAll(key, "-", "")
+	key = strings.ReplaceAll(key, "_", "")
+	return key
+}
+
 func isSensitiveKey(key string) bool {
-	_, ok := sensitiveKeys[strings.ToLower(key)]
-	return ok
+	nk := normalizeKey(key)
+	if _, ok := sensitiveKeys[nk]; ok {
+		return true
+	}
+	for _, marker := range sensitiveSubstrings {
+		if strings.Contains(nk, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // redactAttr returns a with its value replaced by redactedValue if its key
