@@ -9,10 +9,16 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"Fisher-Mapper/internal/apperror"
+	"Fisher-Mapper/internal/bulkhead"
+	"Fisher-Mapper/internal/circuitbreaker"
 	"Fisher-Mapper/internal/idempotency"
+	"Fisher-Mapper/internal/outbox"
 	"Fisher-Mapper/internal/provider"
+	"Fisher-Mapper/internal/queue"
+	"Fisher-Mapper/internal/webhook"
 )
 
 // CreatePaymentInput is the domain-level input for Service.CreatePayment,
@@ -30,6 +36,13 @@ type CreatePaymentInput struct {
 // CreatePaymentOutput is what CreatePayment returns, and — serialized
 // verbatim minus Replayed — what gets stored in the idempotency record for
 // later replay.
+//
+// Fase 3 addendum: CreatePayment no longer calls the provider synchronously,
+// so Status here is always StatusPending on a fresh (non-replayed) call —
+// this is an acknowledgment that the charge has been accepted and queued,
+// not its final outcome. Callers that need the eventual result poll
+// GET /payments/{id} (or, in tests, call Service.ProcessCharge directly and
+// re-fetch the payment row) rather than reading it out of this response.
 type CreatePaymentOutput struct {
 	PaymentID   uuid.UUID `json:"payment_id"`
 	Status      Status    `json:"status"`
@@ -49,7 +62,8 @@ type providerRegistry interface {
 }
 
 // Service is the payment domain service: the single place business logic
-// lives, called by thin REST (and later gRPC) handlers.
+// lives, called by thin REST (and later gRPC) handlers, and by the async
+// charge worker (Fase 3).
 type Service struct {
 	repo      Repository
 	idem      idempotency.Store
@@ -62,6 +76,16 @@ type Service struct {
 	// indefinitely.
 	inProgressPollInterval time.Duration
 	inProgressPollTimeout  time.Duration
+
+	// staging, breakers, and bulkheadLimiter are all optional (nil-safe):
+	// set via the With* methods below by whichever process actually needs
+	// them (the worker), so cmd/server's HTTP-only Service instance can
+	// leave them unset without any behavior change. Kept as separate
+	// setters rather than NewService parameters so existing call sites
+	// (Fase 2 tests, cmd/server) don't need to change.
+	staging         *webhook.Store
+	breakers        *circuitbreaker.Registry
+	bulkheadLimiter *bulkhead.Limiter
 }
 
 // NewService builds a Service with production defaults.
@@ -74,6 +98,29 @@ func NewService(repo Repository, idem idempotency.Store, providers providerRegis
 		inProgressPollInterval: 25 * time.Millisecond,
 		inProgressPollTimeout:  2 * time.Second,
 	}
+}
+
+// WithWebhookStaging enables ProcessCharge's post-charge webhook join
+// (applying any staged event that arrived before this payment existed —
+// plan item 9). Returns s for chaining at construction time.
+func (s *Service) WithWebhookStaging(store *webhook.Store) *Service {
+	s.staging = store
+	return s
+}
+
+// WithCircuitBreakers enables a per-provider circuit breaker check before
+// ProcessCharge calls the provider. Returns s for chaining.
+func (s *Service) WithCircuitBreakers(registry *circuitbreaker.Registry) *Service {
+	s.breakers = registry
+	return s
+}
+
+// WithBulkhead enables a per-provider concurrency limiter around
+// ProcessCharge's provider call, so one slow provider can't starve workers
+// meant to process other providers' charges. Returns s for chaining.
+func (s *Service) WithBulkhead(limiter *bulkhead.Limiter) *Service {
+	s.bulkheadLimiter = limiter
+	return s
 }
 
 // CreatePayment creates a payment via the "charge" (auth+capture in one
@@ -131,6 +178,13 @@ func (s *Service) CreatePayment(ctx context.Context, in CreatePaymentInput, idem
 	return s.doCreatePayment(ctx, in, idempotencyKey)
 }
 
+// doCreatePayment is the Fase 3 async create-payment path (addendum): it
+// does exactly three things in ONE Postgres transaction — insert the
+// payment row (status pending), insert an outbox row carrying a
+// ChargeTaskInput payload, done — and then completes the idempotency
+// record with that "pending" acknowledgment and returns. It never calls
+// providers.Get or a provider method; that happens later, in
+// Service.ProcessCharge, invoked by the worker off the outbox/queue.
 func (s *Service) doCreatePayment(ctx context.Context, in CreatePaymentInput, idempotencyKey string) (CreatePaymentOutput, error) {
 	p := &Payment{
 		TenantID:      in.TenantID,
@@ -140,99 +194,39 @@ func (s *Service) doCreatePayment(ctx context.Context, in CreatePaymentInput, id
 		OperationType: OperationCharge,
 		Provider:      in.Provider,
 	}
-	if err := s.repo.Create(ctx, p); err != nil {
-		return CreatePaymentOutput{}, fmt.Errorf("create payment: %w", err)
-	}
 
-	// pending -> processing: mark the attempt as started before calling
-	// the provider, so the state machine's recorded history always shows
-	// a "processing" step was reached even when the provider responds
-	// synchronously.
-	if err := s.repo.ApplyTransition(ctx, TransitionParams{
-		PaymentID: p.ID,
-		To:        StatusProcessing,
-		EventTS:   s.now(),
-		EventType: "processing_started",
-		Provider:  in.Provider,
-	}); err != nil {
-		return CreatePaymentOutput{}, fmt.Errorf("create payment: %w", err)
-	}
-
-	prov, err := s.providers.Get(in.Provider)
-	if err != nil {
-		// Reservation is left in "reserved" state on this path: a
-		// misconfigured/unregistered provider is a caller/config error
-		// that will fail identically on retry, so nothing is gained by
-		// completing the idempotency record here. See phase report for
-		// the documented limitation (no reservation reaper/TTL yet).
-		return CreatePaymentOutput{}, err
-	}
-
-	chargeResp, chargeErr := prov.Charge(ctx, provider.ChargeRequest{
+	taskInput := ChargeTaskInput{
 		IdempotencyKey: idempotencyKey,
 		TenantID:       in.TenantID,
 		Livemode:       in.Livemode,
-		Amount:         in.Amount,
 		Currency:       in.Currency,
+		Amount:         in.Amount,
+		Provider:       in.Provider,
 		PaymentMethod:  in.PaymentMethod,
 		Metadata:       in.Metadata,
+	}
+
+	err := s.repo.CreateWithOutbox(ctx, p, func(ctx context.Context, tx pgx.Tx) error {
+		// p.ID is only populated once CreateWithOutbox's own INSERT runs,
+		// which happens before this callback — safe to read here.
+		taskInput.PaymentID = p.ID
+		payload, err := json.Marshal(taskInput)
+		if err != nil {
+			return fmt.Errorf("create payment: marshal charge task payload: %w", err)
+		}
+		_, err = outbox.Insert(ctx, tx, queue.TaskTypeCharge, payload)
+		return err
 	})
-
-	if chargeErr != nil {
-		// Plan item 12 ("Charge = no-auto-retry"): a provider error/timeout
-		// on charge must NOT be retried automatically and must NOT be
-		// treated as "failed" — it stays "processing" until reconciliation
-		// (GetStatus, Phase 4) resolves it. We still complete the
-		// idempotency record with this outcome so a retry with the same
-		// key replays "processing" instead of calling the provider again.
-		out := CreatePaymentOutput{PaymentID: p.ID, Status: StatusProcessing}
-		if err := s.completeIdempotency(ctx, in.TenantID, idempotencyKey, 202, out); err != nil {
-			return CreatePaymentOutput{}, err
-		}
-		return out, nil
+	if err != nil {
+		// Reservation is left in "reserved" state on this path (nothing
+		// committed, including the reservation's completion) — a retry
+		// with the same key re-attempts the same insert. See phase report
+		// for the documented limitation (no reservation reaper/TTL yet).
+		return CreatePaymentOutput{}, fmt.Errorf("create payment: %w", err)
 	}
 
-	out := CreatePaymentOutput{PaymentID: p.ID, ProviderRef: chargeResp.ProviderRef, Status: StatusProcessing}
-
-	var target Status
-	switch chargeResp.Status {
-	case provider.StatusSucceeded:
-		target = StatusSucceeded
-	case provider.StatusFailed:
-		target = StatusFailed
-	default:
-		// Processing / Unknown: stays "processing" — resolved later by
-		// reconciliation, not here.
-	}
-
-	if target != "" {
-		var providerRefPtr *string
-		if chargeResp.ProviderRef != "" {
-			providerRefPtr = &chargeResp.ProviderRef
-		}
-		if err := s.repo.ApplyTransition(ctx, TransitionParams{
-			PaymentID:   p.ID,
-			To:          target,
-			EventTS:     s.now(),
-			EventType:   "charge_" + string(target),
-			Provider:    in.Provider,
-			ProviderRef: providerRefPtr,
-		}); err != nil {
-			return CreatePaymentOutput{}, fmt.Errorf("create payment: %w", err)
-		}
-		out.Status = target
-	} else if chargeResp.ProviderRef != "" {
-		// Still processing, but we already have a provider ref worth
-		// persisting for later GetStatus/webhook matching. A transition
-		// with To == current status would be rejected by the state
-		// machine (not in allowedTransitions), so this is a plain field
-		// update instead of a state transition.
-		if err := s.repo.SetProviderRef(ctx, p.ID, chargeResp.ProviderRef); err != nil {
-			return CreatePaymentOutput{}, fmt.Errorf("create payment: %w", err)
-		}
-	}
-
-	if err := s.completeIdempotency(ctx, in.TenantID, idempotencyKey, 201, out); err != nil {
+	out := CreatePaymentOutput{PaymentID: p.ID, Status: StatusPending}
+	if err := s.completeIdempotency(ctx, in.TenantID, idempotencyKey, 202, out); err != nil {
 		return CreatePaymentOutput{}, err
 	}
 
@@ -242,12 +236,14 @@ func (s *Service) doCreatePayment(ctx context.Context, in CreatePaymentInput, id
 // ApplyProviderEvent applies a parsed webhook event to the payment it
 // refers to (matched by provider_ref).
 //
-// Deviation from the full plan, scoped deliberately to stay inside Phase 2:
-// the `incoming_webhook_events` staging table and its "never 404, join
-// later" handling are explicitly Phase 3 work. If no payment exists yet for
-// evt.ProviderRef, this returns apperror.CodeNotFound rather than staging
-// the event — acceptable for Phase 2 because there is no HTTP webhook route
-// wired to this method yet (validations 6/7 exercise it directly).
+// If no payment exists yet for evt.ProviderRef, this returns
+// apperror.CodeNotFound and changes nothing — it does NOT stage the event
+// itself. As of Fase 3, staging on this exact outcome is the caller's job:
+// the REST webhook handler (internal/transport/rest/webhook.go) calls this
+// first, and only falls back to webhook.Store.Stage when it sees
+// CodeNotFound, so the "never 404, always 200, stage for later" rule lives
+// at the transport edge while this method stays a plain, transport-agnostic
+// "apply or tell me why not".
 //
 // Dedup (same provider_event_id applied twice) and stale-event rejection
 // (older timestamp than the last applied event) are both enforced inside
@@ -283,6 +279,14 @@ func (s *Service) ApplyProviderEvent(ctx context.Context, providerName string, e
 		ProviderEventID: eventID,
 		RawPayload:      evt.RawPayload,
 	})
+}
+
+// GetPayment fetches a payment by id -- the read side of the async
+// create-payment flow: since CreatePayment's response is always "pending",
+// callers poll this (via GET /payments/{id}) to observe the eventual
+// outcome ProcessCharge (or a later webhook) drives it to.
+func (s *Service) GetPayment(ctx context.Context, id uuid.UUID) (*Payment, error) {
+	return s.repo.Get(ctx, id)
 }
 
 func (s *Service) completeIdempotency(ctx context.Context, tenantID, key string, statusCode int, out CreatePaymentOutput) error {

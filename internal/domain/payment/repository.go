@@ -73,7 +73,24 @@ type Repository interface {
 	//  4. UPDATE payments (status, last_event_at, provider_ref if set).
 	//  5. INSERT INTO payment_events.
 	//  6. COMMIT.
+	//
+	// Called both by the Fase 2 webhook-apply path AND, as of Fase 3, by
+	// the worker's pending->processing compare-and-swap
+	// (Service.ProcessCharge) — that CAS, not anything in the queue layer,
+	// is what guarantees a redelivered/duplicate charge task never calls
+	// the provider twice: a second delivery's pending->processing attempt
+	// finds the row already "processing" (or terminal) and is rejected by
+	// Transition, exactly like any other invalid transition.
 	ApplyTransition(ctx context.Context, params TransitionParams) error
+
+	// CreateWithOutbox inserts a new payment row in StatusPending and, in
+	// the SAME transaction, invokes withTx (given the open pgx.Tx) so a
+	// caller can persist an outbox row (or any other side effect) that must
+	// never exist without the payment existing, and vice versa — the Fase 3
+	// addendum's atomicity requirement for the async create-payment path.
+	// withTx returning an error rolls back the whole transaction, including
+	// the payment insert.
+	CreateWithOutbox(ctx context.Context, p *Payment, withTx func(ctx context.Context, tx pgx.Tx) error) error
 }
 
 // PGRepository is the pgx-backed Repository implementation.
@@ -97,6 +114,35 @@ func (r *PGRepository) Create(ctx context.Context, p *Payment) error {
 	).Scan(&p.ID, &p.Status, &p.LastEventAt, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("payment: create: %w", err)
+	}
+	return nil
+}
+
+func (r *PGRepository) CreateWithOutbox(ctx context.Context, p *Payment, withTx func(ctx context.Context, tx pgx.Tx) error) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("payment: create with outbox: begin: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	const insertSQL = `
+		INSERT INTO payments (tenant_id, livemode, currency, amount, operation_type, provider, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id, status, last_event_at, created_at, updated_at`
+
+	err = tx.QueryRow(ctx, insertSQL,
+		p.TenantID, p.Livemode, p.Currency, p.Amount, p.OperationType, p.Provider, StatusPending,
+	).Scan(&p.ID, &p.Status, &p.LastEventAt, &p.CreatedAt, &p.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("payment: create with outbox: insert payment: %w", err)
+	}
+
+	if err := withTx(ctx, tx); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("payment: create with outbox: commit: %w", err)
 	}
 	return nil
 }

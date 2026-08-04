@@ -13,11 +13,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
+	"Fisher-Mapper/internal/auth"
 	"Fisher-Mapper/internal/config"
 	"Fisher-Mapper/internal/observability"
 	"Fisher-Mapper/internal/provider"
 	"Fisher-Mapper/internal/provider/mock"
+	"Fisher-Mapper/internal/secrets/env"
 )
 
 // Observability bundles what Register produces so main() can use the
@@ -61,4 +64,31 @@ func RegisterProviders() *provider.Registry {
 	registry := provider.NewRegistry()
 	registry.Register("mock", mock.New(mock.Config{Name: "mock"}))
 	return registry
+}
+
+// RegisterVerifiers builds the per-provider inbound webhook Verifier map,
+// explicitly (no blank import), one entry per registered provider. dedup is
+// wired into every Verifier so an already-applied provider_event_id is
+// rejected before ever reaching state-transition logic (Fase 2 requirement,
+// consumed here by the Fase 3 webhook route).
+//
+// Secret lookup goes through the secrets.Secrets interface (env impl) per
+// the plan's "stub cheap" secrets-manager item, so swapping to a real
+// secrets manager later never touches this call site. PROVIDER_MOCK_SECRET
+// unset falls back to a fixed local-dev default -- documented, not meant
+// for anything resembling production use.
+func RegisterVerifiers(dedup auth.DedupChecker) map[string]auth.Verifier {
+	secretsStore := env.New("")
+	mockSecret := secretsStore.GetSecret("provider_mock_secret")
+	if mockSecret == "" {
+		mockSecret = "dev-only-mock-webhook-secret"
+	}
+
+	return map[string]auth.Verifier{
+		"mock": &auth.HMACVerifier{
+			Secret: mockSecret,
+			Window: 5 * time.Minute,
+			Dedup:  dedup,
+		},
+	}
 }

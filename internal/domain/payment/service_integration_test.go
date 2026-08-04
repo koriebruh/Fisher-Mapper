@@ -18,15 +18,22 @@ import (
 )
 
 // These tests exercise the real Postgres-backed Repository + idempotency
-// Store together — the atomic-insert race (validation 4), replay/conflict
-// (validations 2/3), and state-machine/dedup enforcement under a real row
-// lock (validations 5/6) can't be verified against a fake in-memory
-// repository, since the whole point is the DB-level guarantee.
+// Store together -- the atomic-insert race, replay/conflict, and the Fase 3
+// pending->processing compare-and-swap under a real row lock can't be
+// verified against a fake in-memory repository, since the whole point is
+// the DB-level guarantee.
 //
 // Gated on TEST_POSTGRES_DSN so `go test ./...` stays green without a
-// running Postgres; migrations 00001+00002 must already be applied (run
+// running Postgres; migrations 00001-00003 must already be applied (run
 // `make migrate-up` against the same DSN, e.g. via docker-compose, before
 // running these).
+//
+// Fase 3 addendum note: CreatePayment no longer calls the provider -- it
+// only reserves idempotency and inserts payment(pending)+outbox rows. Every
+// test below that needs a final outcome now does so explicitly by calling
+// Service.ProcessCharge directly with the same ChargeTaskInput the worker
+// would have received off the queue, exactly as the plan addendum sanctions
+// ("gak perlu nunggu real async round-trip buat test deterministic").
 func testPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("TEST_POSTGRES_DSN")
@@ -42,7 +49,7 @@ func testPool(t *testing.T) *pgxpool.Pool {
 }
 
 // singleProviderRegistry satisfies the service's providerRegistry
-// interface with one fixed provider, regardless of the requested name —
+// interface with one fixed provider, regardless of the requested name --
 // enough for these tests, which only ever use "mock".
 type singleProviderRegistry struct {
 	p provider.Provider
@@ -62,11 +69,72 @@ func bodyFor(tenantID string, amount int64) []byte {
 	return []byte(fmt.Sprintf(`{"tenant_id":%q,"currency":"USD","amount":%d,"provider":"mock"}`, tenantID, amount))
 }
 
-// TestService_CreatePayment_ReplayOnSameKeySameBody is Phase 2 validation
-// 2: hitting create-payment twice with the same Idempotency-Key and the
-// same body must return the first call's response (Replayed=true), and
-// must not call the provider a second time.
-func TestService_CreatePayment_ReplayOnSameKeySameBody(t *testing.T) {
+// chargeInputFor builds the ChargeTaskInput a worker would have received
+// off the queue for a CreatePayment call with these exact arguments -- used
+// by tests to invoke ProcessCharge directly instead of waiting on a real
+// async round-trip.
+func chargeInputFor(paymentID uuid.UUID, key string, in CreatePaymentInput) ChargeTaskInput {
+	return ChargeTaskInput{
+		PaymentID:      paymentID,
+		IdempotencyKey: key,
+		TenantID:       in.TenantID,
+		Livemode:       in.Livemode,
+		Currency:       in.Currency,
+		Amount:         in.Amount,
+		Provider:       in.Provider,
+		PaymentMethod:  in.PaymentMethod,
+		Metadata:       in.Metadata,
+	}
+}
+
+// TestService_CreatePayment_ReturnsPendingAndEnqueuesOutbox is the Fase 3
+// re-grounding of what CreatePayment itself guarantees: a fresh call
+// reserves idempotency, inserts the payment (pending) and an outbox row in
+// one transaction, and returns immediately -- no provider call at all.
+func TestService_CreatePayment_ReturnsPendingAndEnqueuesOutbox(t *testing.T) {
+	pool := testPool(t)
+	mockProv := mock.New(mock.Config{Name: "mock"})
+	svc := newTestService(pool, mockProv)
+
+	tenantID := uuid.NewString()
+	key := uuid.NewString()
+	raw := bodyFor(tenantID, 1000)
+	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 1000, Provider: "mock"}
+
+	out, err := svc.CreatePayment(context.Background(), in, key, raw)
+	if err != nil {
+		t.Fatalf("CreatePayment: %v", err)
+	}
+	if out.Replayed {
+		t.Error("fresh call reported Replayed=true, want false")
+	}
+	if out.Status != StatusPending {
+		t.Errorf("Status = %s, want pending (create-payment must not call the provider)", out.Status)
+	}
+	if got := mockProv.CallCounts().Charge; got != 0 {
+		t.Errorf("provider Charge called %d times by CreatePayment, want 0", got)
+	}
+
+	var outboxCount int
+	err = pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbox WHERE task_type = 'charge' AND status = 'pending' AND payload->>'payment_id' = $1`,
+		out.PaymentID.String(),
+	).Scan(&outboxCount)
+	if err != nil {
+		t.Fatalf("count outbox rows: %v", err)
+	}
+	if outboxCount != 1 {
+		t.Errorf("pending outbox rows for this payment = %d, want 1", outboxCount)
+	}
+}
+
+// TestService_ReplayOnSameKeySameBody is Phase 2 validation 2, adjusted for
+// the async flow: hitting create-payment twice with the same
+// Idempotency-Key and body must return the SAME "pending" acknowledgment
+// both times (Replayed=true the second time) -- it does not reflect
+// whatever ProcessCharge later does to the payment, since the idempotency
+// record was completed with the pending response at HTTP time.
+func TestService_ReplayOnSameKeySameBody(t *testing.T) {
 	pool := testPool(t)
 	mockProv := mock.New(mock.Config{Name: "mock"})
 	svc := newTestService(pool, mockProv)
@@ -84,6 +152,13 @@ func TestService_CreatePayment_ReplayOnSameKeySameBody(t *testing.T) {
 		t.Fatal("first call reported Replayed=true, want false")
 	}
 
+	// Drive the payment to its final state via the worker path, same as
+	// the real system would (asynchronously) -- proves the replayed
+	// response still reports "pending", not the (by-then) real outcome.
+	if err := svc.ProcessCharge(context.Background(), chargeInputFor(first.PaymentID, key, in)); err != nil {
+		t.Fatalf("ProcessCharge: %v", err)
+	}
+
 	second, err := svc.CreatePayment(context.Background(), in, key, raw)
 	if err != nil {
 		t.Fatalf("second CreatePayment: %v", err)
@@ -94,16 +169,28 @@ func TestService_CreatePayment_ReplayOnSameKeySameBody(t *testing.T) {
 	if second.PaymentID != first.PaymentID {
 		t.Errorf("second.PaymentID = %v, want %v (same payment)", second.PaymentID, first.PaymentID)
 	}
+	if second.Status != StatusPending {
+		t.Errorf("replayed Status = %s, want pending (idempotency record stores the original 202 body)", second.Status)
+	}
 	if got := mockProv.CallCounts().Charge; got != 1 {
-		t.Errorf("provider Charge called %d times, want exactly 1 (second request must not re-process)", got)
+		t.Errorf("provider Charge called %d times, want exactly 1 (from the single ProcessCharge call)", got)
+	}
+
+	p, err := NewPGRepository(pool).Get(context.Background(), first.PaymentID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if p.Status != StatusSucceeded {
+		t.Errorf("actual payment status = %s, want succeeded (mock defaults to succeeded)", p.Status)
 	}
 }
 
-// TestService_CreatePayment_ConflictOnSameKeyDifferentBody is Phase 2
-// validation 3: same Idempotency-Key, different body -> 409-mapped
-// apperror.CodeIdempotencyConflict, and the provider must not be called a
-// second time either.
-func TestService_CreatePayment_ConflictOnSameKeyDifferentBody(t *testing.T) {
+// TestService_ConflictOnSameKeyDifferentBody is Phase 2 validation 3: same
+// Idempotency-Key, different body -> 409-mapped
+// apperror.CodeIdempotencyConflict. CreatePayment never calls the provider
+// regardless (conflict is detected at the idempotency-reserve stage, before
+// any payment row exists for the second call).
+func TestService_ConflictOnSameKeyDifferentBody(t *testing.T) {
 	pool := testPool(t)
 	mockProv := mock.New(mock.Config{Name: "mock"})
 	svc := newTestService(pool, mockProv)
@@ -126,17 +213,18 @@ func TestService_CreatePayment_ConflictOnSameKeyDifferentBody(t *testing.T) {
 	if apperror.CodeOf(err) != apperror.CodeIdempotencyConflict {
 		t.Errorf("CodeOf(err) = %v, want %v", apperror.CodeOf(err), apperror.CodeIdempotencyConflict)
 	}
-	if got := mockProv.CallCounts().Charge; got != 1 {
-		t.Errorf("provider Charge called %d times, want exactly 1 (conflicting request must not call provider)", got)
+	if got := mockProv.CallCounts().Charge; got != 0 {
+		t.Errorf("provider Charge called %d times, want 0 (CreatePayment never calls the provider)", got)
 	}
 }
 
-// TestService_CreatePayment_ConcurrentSameKey_ChargeCalledOnce is Phase 2
-// validation 4: two goroutines racing with the identical Idempotency-Key
-// and body must result in exactly one provider.Charge call — the DB's
-// atomic insert on (tenant_id, idempotency_key), not "check then insert",
-// is what makes this true. Run with `go test -race`.
-func TestService_CreatePayment_ConcurrentSameKey_ChargeCalledOnce(t *testing.T) {
+// TestService_ConcurrentCreatePaymentSameKey_OnlyOneReservationWins is
+// Phase 2 validation 4, still meaningful post-Fase 3: N concurrent
+// CreatePayment calls with the identical Idempotency-Key+body must result
+// in exactly one winning reservation (one payment row, one outbox row) --
+// losers get either a replayed pending response or
+// CodeIdempotencyInProgress, never a second row.
+func TestService_ConcurrentCreatePaymentSameKey_OnlyOneReservationWins(t *testing.T) {
 	pool := testPool(t)
 	mockProv := mock.New(mock.Config{Name: "mock"})
 	svc := newTestService(pool, mockProv)
@@ -160,8 +248,8 @@ func TestService_CreatePayment_ConcurrentSameKey_ChargeCalledOnce(t *testing.T) 
 	}
 	wg.Wait()
 
-	if got := mockProv.CallCounts().Charge; got != 1 {
-		t.Fatalf("provider Charge called %d times across %d concurrent requests, want exactly 1 (double charge)", got, n)
+	if got := mockProv.CallCounts().Charge; got != 0 {
+		t.Fatalf("provider Charge called %d times by concurrent CreatePayment calls, want 0", got)
 	}
 
 	var successCount int
@@ -177,7 +265,7 @@ func TestService_CreatePayment_ConcurrentSameKey_ChargeCalledOnce(t *testing.T) 
 			}
 		case apperror.CodeOf(errs[i]) == apperror.CodeIdempotencyInProgress:
 			// Acceptable loser outcome: the winner hadn't completed yet
-			// within the poll window. Still not a double charge.
+			// within the poll window.
 		default:
 			t.Errorf("goroutine %d returned unexpected error: %v", i, errs[i])
 		}
@@ -185,78 +273,185 @@ func TestService_CreatePayment_ConcurrentSameKey_ChargeCalledOnce(t *testing.T) 
 	if successCount == 0 {
 		t.Fatal("no goroutine received a successful (possibly replayed) response")
 	}
+
+	var paymentCount int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM payments WHERE tenant_id = $1`, tenantID,
+	).Scan(&paymentCount); err != nil {
+		t.Fatalf("count payments: %v", err)
+	}
+	if paymentCount != 1 {
+		t.Fatalf("payment rows for this tenant = %d, want exactly 1", paymentCount)
+	}
 }
 
-// TestService_CreatePayment_ConcurrentSameKeyWithProviderLatency exercises
-// the same race as the test above, but with the mock provider configured
-// to take 300ms per call — long enough that every "loser" goroutine is
-// guaranteed to observe idempotency.StateInProgress (the reservation row
-// exists but Complete hasn't run yet) rather than finding it already
-// StateCompleted. Without this, an instant mock provider makes it likely
-// every loser lands on StateCompleted and the StateInProgress poll branch
-// in Service.pollForCompletion never actually executes under contention —
-// this test forces that branch to run and still requires exactly one
-// Charge call and one converged payment id.
-func TestService_CreatePayment_ConcurrentSameKeyWithProviderLatency(t *testing.T) {
+// TestService_ProcessCharge_ConcurrentRedelivery_ChargeCalledOnce is the
+// central Fase 3 invariant this phase adds (replacing the Phase 2 test that
+// exercised the now-removed synchronous provider call inside
+// CreatePayment): a charge task redelivered/duplicated N times for the SAME
+// payment must result in exactly one provider.Charge call. This is what the
+// "Catatan desain wajib" is about -- the pending->processing
+// compare-and-swap in ProcessCharge, not anything in the queue layer, is
+// what makes this true.
+func TestService_ProcessCharge_ConcurrentRedelivery_ChargeCalledOnce(t *testing.T) {
+	pool := testPool(t)
+	mockProv := mock.New(mock.Config{Name: "mock"})
+	svc := newTestService(pool, mockProv)
+
+	tenantID := uuid.NewString()
+	key := uuid.NewString()
+	raw := bodyFor(tenantID, 700)
+	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 700, Provider: "mock"}
+
+	out, err := svc.CreatePayment(context.Background(), in, key, raw)
+	if err != nil {
+		t.Fatalf("CreatePayment: %v", err)
+	}
+
+	chargeInput := chargeInputFor(out.PaymentID, key, in)
+
+	const n = 8
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = svc.ProcessCharge(context.Background(), chargeInput)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("ProcessCharge redelivery %d returned error: %v (must return nil even for a losing CAS)", i, err)
+		}
+	}
+
+	if got := mockProv.CallCounts().Charge; got != 1 {
+		t.Fatalf("provider Charge called %d times across %d concurrent redeliveries, want exactly 1 (double charge)", got, n)
+	}
+
+	p, err := NewPGRepository(pool).Get(context.Background(), out.PaymentID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if p.Status != StatusSucceeded {
+		t.Errorf("payment status = %s, want succeeded", p.Status)
+	}
+}
+
+// TestService_ProcessCharge_ConcurrentRedeliveryWithLatency_ChargeCalledOnce
+// is the same invariant as above, but with the mock provider configured to
+// take 300ms per call -- long enough that the CAS contention window is wide
+// open when every redelivery's ApplyTransition races. Without provider
+// latency, it's plausible (though still not required to be) for the first
+// redelivery to already be calling the provider before the others even
+// reach the CAS, making the race less likely to actually be exercised;
+// this forces it every run.
+func TestService_ProcessCharge_ConcurrentRedeliveryWithLatency_ChargeCalledOnce(t *testing.T) {
 	pool := testPool(t)
 	mockProv := mock.New(mock.Config{Name: "mock", Latency: 300 * time.Millisecond})
 	svc := newTestService(pool, mockProv)
 
 	tenantID := uuid.NewString()
 	key := uuid.NewString()
-	raw := bodyFor(tenantID, 600)
-	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 600, Provider: "mock"}
+	raw := bodyFor(tenantID, 650)
+	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 650, Provider: "mock"}
+
+	out, err := svc.CreatePayment(context.Background(), in, key, raw)
+	if err != nil {
+		t.Fatalf("CreatePayment: %v", err)
+	}
+	chargeInput := chargeInputFor(out.PaymentID, key, in)
 
 	const n = 6
 	var wg sync.WaitGroup
-	outs := make([]CreatePaymentOutput, n)
-	errs := make([]error, n)
-
 	var start sync.WaitGroup
 	start.Add(1)
+	errs := make([]error, n)
 	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
 			start.Wait()
-			outs[i], errs[i] = svc.CreatePayment(context.Background(), in, key, raw)
+			errs[i] = svc.ProcessCharge(context.Background(), chargeInput)
 		}(i)
 	}
 	start.Done()
 	wg.Wait()
 
-	if got := mockProv.CallCounts().Charge; got != 1 {
-		t.Fatalf("provider Charge called %d times across %d concurrent requests (with provider latency), want exactly 1", got, n)
-	}
-
-	var successCount int
-	var paymentID uuid.UUID
-	for i := range n {
-		switch {
-		case errs[i] == nil:
-			successCount++
-			if paymentID == uuid.Nil {
-				paymentID = outs[i].PaymentID
-			} else if outs[i].PaymentID != paymentID {
-				t.Errorf("goroutine %d returned a different payment id: %v, want %v", i, outs[i].PaymentID, paymentID)
-			}
-		case apperror.CodeOf(errs[i]) == apperror.CodeIdempotencyInProgress:
-			// A loser that gave up waiting inside the poll window — still
-			// not a double charge, and this is the branch this test exists
-			// to force.
-		default:
-			t.Errorf("goroutine %d returned unexpected error: %v", i, errs[i])
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("ProcessCharge redelivery %d returned error: %v", i, err)
 		}
 	}
-	if successCount == 0 {
-		t.Fatal("no goroutine received a successful (possibly replayed) response")
+
+	if got := mockProv.CallCounts().Charge; got != 1 {
+		t.Fatalf("provider Charge called %d times across %d concurrent redeliveries (with provider latency), want exactly 1", got, n)
+	}
+}
+
+// TestService_ProcessCharge_ProviderTimeout_NoRetry_StaysProcessing is Fase
+// 3 validation 4: a charge call that errors/times out must leave the
+// payment "processing" (never retried automatically), and a SECOND
+// ProcessCharge call for the same payment (simulating a naive extra worker
+// attempt after the fact) must not call the provider again either -- by
+// then the payment is no longer "pending", so the CAS rejects it.
+func TestService_ProcessCharge_ProviderTimeout_NoRetry_StaysProcessing(t *testing.T) {
+	pool := testPool(t)
+	mockProv := mock.New(mock.Config{Name: "mock", ForceError: mock.ErrForced})
+	svc := newTestService(pool, mockProv)
+
+	tenantID := uuid.NewString()
+	key := uuid.NewString()
+	raw := bodyFor(tenantID, 900)
+	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 900, Provider: "mock"}
+
+	out, err := svc.CreatePayment(context.Background(), in, key, raw)
+	if err != nil {
+		t.Fatalf("CreatePayment: %v", err)
+	}
+	chargeInput := chargeInputFor(out.PaymentID, key, in)
+
+	if err := svc.ProcessCharge(context.Background(), chargeInput); err != nil {
+		t.Fatalf("first ProcessCharge (provider error) returned error, want nil: %v", err)
+	}
+	if got := mockProv.CallCounts().Charge; got != 1 {
+		t.Fatalf("provider Charge called %d times after first attempt, want 1", got)
+	}
+
+	repo := NewPGRepository(pool)
+	p, err := repo.Get(context.Background(), out.PaymentID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if p.Status != StatusProcessing {
+		t.Fatalf("payment status after provider error = %s, want processing (no auto-retry, no false failure)", p.Status)
+	}
+
+	// Simulate a redelivery (or a naive extra call) of the same task.
+	if err := svc.ProcessCharge(context.Background(), chargeInput); err != nil {
+		t.Fatalf("second ProcessCharge returned error, want nil: %v", err)
+	}
+	if got := mockProv.CallCounts().Charge; got != 1 {
+		t.Fatalf("provider Charge called %d times after redelivery, want still 1 (no double charge)", got)
+	}
+
+	p, err = repo.Get(context.Background(), out.PaymentID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if p.Status != StatusProcessing {
+		t.Fatalf("payment status after redelivery = %s, want still processing", p.Status)
 	}
 }
 
 // TestService_ApplyProviderEvent_TerminalStateRejectsOlderEvent is Phase 2
-// validation 5: once a payment reaches succeeded, an event with an OLDER
-// timestamp trying to move it to failed must be rejected, and the stored
-// state must not move.
+// validation 5, adjusted: drive the payment to succeeded via ProcessCharge
+// (not CreatePayment, which no longer produces a final outcome), then
+// verify an older event trying to move it to failed is rejected and the
+// stored state does not move.
 func TestService_ApplyProviderEvent_TerminalStateRejectsOlderEvent(t *testing.T) {
 	pool := testPool(t)
 	repo := NewPGRepository(pool)
@@ -272,13 +467,21 @@ func TestService_ApplyProviderEvent_TerminalStateRejectsOlderEvent(t *testing.T)
 	if err != nil {
 		t.Fatalf("CreatePayment: %v", err)
 	}
-	if out.Status != StatusSucceeded {
-		t.Fatalf("payment status = %s, want succeeded (mock configured to succeed)", out.Status)
+	if err := svc.ProcessCharge(context.Background(), chargeInputFor(out.PaymentID, key, in)); err != nil {
+		t.Fatalf("ProcessCharge: %v", err)
+	}
+
+	p, err := repo.Get(context.Background(), out.PaymentID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if p.Status != StatusSucceeded {
+		t.Fatalf("payment status = %s, want succeeded (mock configured to succeed)", p.Status)
 	}
 
 	olderEvent := provider.WebhookEvent{
 		ProviderEventID: uuid.NewString(),
-		ProviderRef:     out.ProviderRef,
+		ProviderRef:     *p.ProviderRef,
 		Status:          provider.StatusFailed,
 		OccurredAt:      time.Now().UTC().Add(-1 * time.Hour), // clearly before "now"
 		RawPayload:      []byte(`{"late":true}`),
@@ -291,7 +494,7 @@ func TestService_ApplyProviderEvent_TerminalStateRejectsOlderEvent(t *testing.T)
 		t.Errorf("CodeOf(err) = %v, want %v", apperror.CodeOf(err), apperror.CodeTerminalState)
 	}
 
-	p, err := repo.Get(context.Background(), out.PaymentID)
+	p, err = repo.Get(context.Background(), out.PaymentID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -300,14 +503,15 @@ func TestService_ApplyProviderEvent_TerminalStateRejectsOlderEvent(t *testing.T)
 	}
 }
 
-// TestService_ApplyProviderEvent_DuplicateProviderEventIDDropped is Phase
-// 2 validation 6: an event with a provider_event_id already applied must
-// be dropped on the second delivery, not re-applied.
+// TestService_ApplyProviderEvent_DuplicateProviderEventIDDropped is Phase 2
+// validation 6, adjusted: drive the payment to "processing" (mock
+// configured to stay processing) via ProcessCharge, then verify a
+// provider_event_id applied once is dropped on redelivery.
 func TestService_ApplyProviderEvent_DuplicateProviderEventIDDropped(t *testing.T) {
 	pool := testPool(t)
 	repo := NewPGRepository(pool)
 	// Status Processing so the payment does NOT reach a terminal state via
-	// CreatePayment itself — the webhook event is what drives it to
+	// ProcessCharge itself -- the webhook event is what drives it to
 	// succeeded, isolating the dedup behavior from terminal-immutability.
 	mockProv := mock.New(mock.Config{Name: "mock", Status: provider.StatusProcessing})
 	svc := newTestService(pool, mockProv)
@@ -321,14 +525,25 @@ func TestService_ApplyProviderEvent_DuplicateProviderEventIDDropped(t *testing.T
 	if err != nil {
 		t.Fatalf("CreatePayment: %v", err)
 	}
-	if out.Status != StatusProcessing {
-		t.Fatalf("payment status = %s, want processing", out.Status)
+	if err := svc.ProcessCharge(context.Background(), chargeInputFor(out.PaymentID, key, in)); err != nil {
+		t.Fatalf("ProcessCharge: %v", err)
+	}
+
+	p, err := repo.Get(context.Background(), out.PaymentID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if p.Status != StatusProcessing {
+		t.Fatalf("payment status = %s, want processing", p.Status)
+	}
+	if p.ProviderRef == nil {
+		t.Fatal("provider_ref not set after ProcessCharge with a still-processing provider response")
 	}
 
 	eventID := uuid.NewString()
 	evt := provider.WebhookEvent{
 		ProviderEventID: eventID,
-		ProviderRef:     out.ProviderRef,
+		ProviderRef:     *p.ProviderRef,
 		Status:          provider.StatusSucceeded,
 		OccurredAt:      time.Now().UTC(),
 		RawPayload:      []byte(`{}`),
@@ -346,7 +561,7 @@ func TestService_ApplyProviderEvent_DuplicateProviderEventIDDropped(t *testing.T
 		t.Errorf("CodeOf(err) = %v, want %v", apperror.CodeOf(err), apperror.CodeDuplicateEvent)
 	}
 
-	p, err := repo.Get(context.Background(), out.PaymentID)
+	p, err = repo.Get(context.Background(), out.PaymentID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}

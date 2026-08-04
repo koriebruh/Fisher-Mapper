@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 
 	"Fisher-Mapper/internal/apperror"
 	"Fisher-Mapper/internal/domain/payment"
@@ -28,15 +29,18 @@ type createPaymentRequest struct {
 	Metadata      map[string]string `json:"metadata"`
 }
 
-// RegisterPaymentRoutes registers the Phase 2 payment endpoint.
+// RegisterPaymentRoutes registers the payment endpoints on router (either
+// the top-level *fiber.App or a sub-group, e.g. one with rate-limit
+// middleware applied — see transport/rest/health.go's NewApp).
 //
 // This handler is intentionally thin: request decode -> call into
 // payment.Service -> map the result/error to an HTTP response. All
 // business logic (idempotency, provider call, state transition) lives in
 // the service, per the plan's "satu service layer, dua transport tipis"
 // principle — the same service will back a gRPC handler in Phase 6.
-func RegisterPaymentRoutes(app *fiber.App, deps PaymentDeps) {
-	app.Post("/payments", handleCreatePayment(deps))
+func RegisterPaymentRoutes(router fiber.Router, deps PaymentDeps) {
+	router.Post("/", handleCreatePayment(deps))
+	router.Get("/:id", handleGetPayment(deps))
 }
 
 func handleCreatePayment(deps PaymentDeps) fiber.Handler {
@@ -71,10 +75,43 @@ func handleCreatePayment(deps PaymentDeps) fiber.Handler {
 			return writeError(c, err)
 		}
 
-		status := fiber.StatusCreated
+		// Fase 3 addendum: create-payment is async now -- a fresh
+		// (non-replayed) call never has a final outcome to report yet, so
+		// it is always 202 Accepted. A replayed response (same
+		// key+fingerprint as an earlier call) is 200 OK, same as Phase 2.
+		status := fiber.StatusAccepted
 		if out.Replayed {
 			status = fiber.StatusOK
 		}
 		return c.Status(status).JSON(out)
+	}
+}
+
+// paymentView is the wire shape for GET /payments/{id} -- the read side of
+// the async flow, letting a caller poll for the outcome CreatePayment's
+// 202 response didn't include.
+type paymentView struct {
+	PaymentID   uuid.UUID `json:"payment_id"`
+	Status      string    `json:"status"`
+	ProviderRef string    `json:"provider_ref,omitempty"`
+}
+
+func handleGetPayment(deps PaymentDeps) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		id, err := uuid.Parse(c.Params("id"))
+		if err != nil {
+			return writeError(c, apperror.New(apperror.CodeValidation, "invalid payment id"))
+		}
+
+		p, err := deps.Service.GetPayment(c.Context(), id)
+		if err != nil {
+			return writeError(c, err)
+		}
+
+		view := paymentView{PaymentID: p.ID, Status: string(p.Status)}
+		if p.ProviderRef != nil {
+			view.ProviderRef = *p.ProviderRef
+		}
+		return c.JSON(view)
 	}
 }

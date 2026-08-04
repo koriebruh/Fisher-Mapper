@@ -10,18 +10,27 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"Fisher-Mapper/internal/auth"
 	"Fisher-Mapper/internal/domain/payment"
+	"Fisher-Mapper/internal/provider"
 	"Fisher-Mapper/internal/queue"
+	"Fisher-Mapper/internal/ratelimit"
+	"Fisher-Mapper/internal/webhook"
 )
 
 // Deps are the dependencies the REST transport needs across all route
-// groups. Phase 1 only used Pool/QueueClient (health checks); Phase 2 adds
-// PaymentService for the create-payment endpoint. Kept as one struct since
-// main() wires everything at once into a single fiber.App.
+// groups. Kept as one struct since main() wires everything at once into a
+// single fiber.App. Providers/Verifiers/WebhookStore are Fase 3 additions
+// backing POST /webhooks/:provider; RateLimiter is optional (nil disables
+// the middleware entirely, e.g. in tests that don't care about it).
 type Deps struct {
 	Pool           *pgxpool.Pool
 	QueueClient    *asynq.Client
 	PaymentService *payment.Service
+	Providers      *provider.Registry
+	Verifiers      map[string]auth.Verifier
+	WebhookStore   *webhook.Store
+	RateLimiter    *ratelimit.Limiter
 }
 
 // NewApp builds the fiber app and registers all routes.
@@ -31,8 +40,22 @@ func NewApp(deps Deps) *fiber.App {
 	})
 
 	RegisterHealthRoutes(app, deps)
+
 	if deps.PaymentService != nil {
-		RegisterPaymentRoutes(app, PaymentDeps{Service: deps.PaymentService})
+		paymentGroup := app.Group("/payments")
+		if deps.RateLimiter != nil {
+			paymentGroup.Use(ratelimit.Middleware(deps.RateLimiter, nil))
+		}
+		RegisterPaymentRoutes(paymentGroup, PaymentDeps{Service: deps.PaymentService})
+	}
+
+	if deps.PaymentService != nil && deps.Providers != nil && deps.Verifiers != nil && deps.WebhookStore != nil {
+		RegisterWebhookRoutes(app, WebhookDeps{
+			Providers: deps.Providers,
+			Verifiers: deps.Verifiers,
+			Staging:   deps.WebhookStore,
+			Service:   deps.PaymentService,
+		})
 	}
 
 	return app

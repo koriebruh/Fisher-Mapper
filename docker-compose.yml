@@ -27,12 +27,21 @@ services:
       timeout: 5s
       retries: 10
 
-  # asynqmon: queue inspection UI. Not required to be running for Phase 1
-  # validation, but cheap to have on hand once the worker/task layer
-  # (Phase 3) exists. It has no built-in auth (only a Redis password option,
-  # which doesn't protect the dashboard itself), so until Phase 3 wraps it
-  # in basic-auth/JWT, the port is bound to loopback only — never expose
-  # this on a non-localhost interface without that wrapper in front of it.
+  # asynqmon: queue inspection UI, now actually useful with the Fase 3
+  # worker/task layer in place. It has no built-in auth of its own (only a
+  # Redis password option, which doesn't protect the dashboard itself).
+  #
+  # Fase 3 decision (see phase report for the full tradeoff): a basic-auth
+  # wrapper turned out to be buildable purely in Go (mount
+  # github.com/hibiken/asynqmon's http.Handler behind fiber's basicauth
+  # middleware) rather than needing an external reverse proxy -- but
+  # asynqmon's latest release pins asynq v0.24.1 against this module's
+  # v0.26.0, an unverified cross-version combination, and wiring it in means
+  # a new dependency, a new port, new config/credentials, and
+  # docker-compose churn on top of an already large phase. Deferred on
+  # scope grounds; loopback-only binding remains the standing mitigation --
+  # never expose this port on a non-localhost interface without adding that
+  # wrapper (or a reverse proxy) first.
   asynqmon:
     image: hibiken/asynqmon:latest
     restart: unless-stopped

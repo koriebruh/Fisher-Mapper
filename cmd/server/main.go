@@ -1,8 +1,12 @@
 // Command server bootstraps config, a Postgres pool, a Redis-backed asynq
-// client, the PJP provider registry, the payment domain service, and a
-// single fiber HTTP server exposing /healthz, /readyz, and (Phase 2)
-// POST /payments — wired as oklog/run actors with a signal handler so
-// shutdown is deterministic.
+// client (used only for the /readyz health check -- see cmd/worker for the
+// process that actually dispatches/consumes tasks), the PJP provider
+// registry, the payment domain service, and a single fiber HTTP server
+// exposing /healthz, /readyz, POST /payments, GET /payments/{id}, and (Fase
+// 3) POST /webhooks/{provider} — wired as oklog/run actors with a signal
+// handler so shutdown is deterministic. This process never calls a
+// provider directly: create-payment only writes to Postgres (payment row +
+// outbox row, one transaction).
 //
 // Startup order (per plan "Prinsip Arsitektur Dasar"):
 //
@@ -29,7 +33,9 @@ import (
 	"Fisher-Mapper/internal/idempotency"
 	"Fisher-Mapper/internal/lifecycle"
 	"Fisher-Mapper/internal/queue"
+	"Fisher-Mapper/internal/ratelimit"
 	"Fisher-Mapper/internal/transport/rest"
+	"Fisher-Mapper/internal/webhook"
 )
 
 const serviceName = "fisher-mapper"
@@ -90,17 +96,29 @@ func run_() error {
 	}
 
 	// 5. Domain wiring: providers (explicit registry, no blank import),
-	// idempotency store, payment repository/service.
+	// idempotency store, payment repository/service. This process is
+	// HTTP-only (Fase 3 addendum): create-payment writes to Postgres only
+	// (payment row + outbox row, one transaction) and never touches
+	// Redis/the queue directly -- cmd/worker owns the outbox relay and the
+	// actual provider calls.
 	providers := bootstrap.RegisterProviders()
 	idemStore := idempotency.NewPGStore(pool)
 	paymentRepo := payment.NewPGRepository(pool)
 	paymentService := payment.NewService(paymentRepo, idemStore, providers)
+	verifiers := bootstrap.RegisterVerifiers(paymentRepo)
+	webhookStore := webhook.NewStore(pool)
+	limiter := ratelimit.New(20, 40) // stub-cheap default: 20 req/s, burst 40, per client/API key
 
-	// 6. Transport: single fiber app with health + payment endpoints.
+	// 6. Transport: single fiber app with health + payment + webhook
+	// endpoints.
 	app := rest.NewApp(rest.Deps{
 		Pool:           pool,
 		QueueClient:    queueClient,
 		PaymentService: paymentService,
+		Providers:      providers,
+		Verifiers:      verifiers,
+		WebhookStore:   webhookStore,
+		RateLimiter:    limiter,
 	})
 
 	addr := fmt.Sprintf(":%d", cfg.HTTP.Port)
