@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"Fisher-Mapper/internal/apperror"
+	"Fisher-Mapper/internal/bulkhead"
 	"Fisher-Mapper/internal/idempotency"
 	"Fisher-Mapper/internal/provider"
 	"Fisher-Mapper/internal/provider/mock"
@@ -63,6 +64,21 @@ func newTestService(pool *pgxpool.Pool, mockProv *mock.Mock) *Service {
 	repo := NewPGRepository(pool)
 	idemStore := idempotency.NewPGStore(pool)
 	return NewService(repo, idemStore, singleProviderRegistry{mockProv})
+}
+
+// multiProviderRegistry dispatches Get by name to a fixed map -- used by
+// the bulkhead test, which needs two distinct providers ("slow" and
+// "fast") live at once.
+type multiProviderRegistry struct {
+	byName map[string]provider.Provider
+}
+
+func (r multiProviderRegistry) Get(name string) (provider.Provider, error) {
+	p, ok := r.byName[name]
+	if !ok {
+		return nil, apperror.New(apperror.CodeProviderNotRegistered, "not registered: "+name)
+	}
+	return p, nil
 }
 
 func bodyFor(tenantID string, amount int64) []byte {
@@ -567,5 +583,82 @@ func TestService_ApplyProviderEvent_DuplicateProviderEventIDDropped(t *testing.T
 	}
 	if p.Status != StatusSucceeded {
 		t.Errorf("payment status = %s, want succeeded (from the first, accepted event)", p.Status)
+	}
+}
+
+// TestService_ProcessCharge_Bulkhead_SlowProviderDoesNotStarveFastProvider
+// is Fase 3 validation 6, exercised at the layer the task actually
+// describes: two mock providers behind the SAME Service/bulkhead, one
+// configured slow, driven through the real ProcessCharge path (CAS +
+// provider call + bulkhead acquire/release) rather than the bare
+// bulkhead.Limiter in isolation. Saturating the slow provider's capacity
+// must never delay a charge routed to the fast provider.
+func TestService_ProcessCharge_Bulkhead_SlowProviderDoesNotStarveFastProvider(t *testing.T) {
+	pool := testPool(t)
+	repo := NewPGRepository(pool)
+	idemStore := idempotency.NewPGStore(pool)
+
+	slowProv := mock.New(mock.Config{Name: "slow", Latency: 2 * time.Second})
+	fastProv := mock.New(mock.Config{Name: "fast"})
+	registry := multiProviderRegistry{byName: map[string]provider.Provider{"slow": slowProv, "fast": fastProv}}
+
+	svc := NewService(repo, idemStore, registry).WithBulkhead(bulkhead.New(2))
+
+	// Saturate the "slow" provider's bulkhead capacity (2) with 2 charges
+	// that will each block for ~2s inside prov.Charge.
+	const slowCount = 2
+	slowInputs := make([]ChargeTaskInput, slowCount)
+	for i := 0; i < slowCount; i++ {
+		tenantID := uuid.NewString()
+		key := uuid.NewString()
+		raw := bodyFor(tenantID, 100)
+		in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 100, Provider: "slow"}
+		out, err := svc.CreatePayment(context.Background(), in, key, raw)
+		if err != nil {
+			t.Fatalf("CreatePayment (slow #%d): %v", i, err)
+		}
+		slowInputs[i] = chargeInputFor(out.PaymentID, key, in)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < slowCount; i++ {
+		wg.Add(1)
+		go func(in ChargeTaskInput) {
+			defer wg.Done()
+			if err := svc.ProcessCharge(context.Background(), in); err != nil {
+				t.Errorf("ProcessCharge (slow): %v", err)
+			}
+		}(slowInputs[i])
+	}
+
+	// Give the slow goroutines a moment to actually acquire their bulkhead
+	// slots and enter prov.Charge before measuring the fast provider.
+	time.Sleep(200 * time.Millisecond)
+
+	fastTenantID := uuid.NewString()
+	fastKey := uuid.NewString()
+	fastRaw := bodyFor(fastTenantID, 200)
+	fastIn := CreatePaymentInput{TenantID: fastTenantID, Currency: "USD", Amount: 200, Provider: "fast"}
+	fastOut, err := svc.CreatePayment(context.Background(), fastIn, fastKey, fastRaw)
+	if err != nil {
+		t.Fatalf("CreatePayment (fast): %v", err)
+	}
+
+	start := time.Now()
+	if err := svc.ProcessCharge(context.Background(), chargeInputFor(fastOut.PaymentID, fastKey, fastIn)); err != nil {
+		t.Fatalf("ProcessCharge (fast): %v", err)
+	}
+	elapsed := time.Since(start)
+
+	wg.Wait()
+
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("ProcessCharge for the fast provider took %v while the slow provider's bulkhead was saturated -- bulkhead did not isolate providers", elapsed)
+	}
+	if got := fastProv.CallCounts().Charge; got != 1 {
+		t.Errorf("fast provider Charge calls = %d, want 1", got)
+	}
+	if got := slowProv.CallCounts().Charge; got != slowCount {
+		t.Errorf("slow provider Charge calls = %d, want %d", got, slowCount)
 	}
 }

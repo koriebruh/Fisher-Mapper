@@ -55,7 +55,21 @@ type ChargeTaskInput struct {
 // genuinely unexpected failures (unregistered provider, a DB write
 // failing) that SHOULD land in terminal_failures for manual inspection.
 func (s *Service) ProcessCharge(ctx context.Context, in ChargeTaskInput) error {
-	err := s.repo.ApplyTransition(ctx, TransitionParams{
+	// Resolved BEFORE the CAS deliberately: an unregistered/misconfigured
+	// provider is a config error that will fail identically on any
+	// retry/redelivery, so there is nothing to gain by burning this
+	// payment's one CAS-guarded provider-call attempt on it. Failing here
+	// leaves the payment "pending" (not "processing"), which is the
+	// correct resting state for "never actually attempted" rather than
+	// "attempted and unresolved".
+	prov, err := s.providers.Get(in.Provider)
+	if err != nil {
+		// Unregistered/misconfigured provider: genuinely unexpected,
+		// surfaced as an error so it reaches terminal_failures.
+		return err
+	}
+
+	err = s.repo.ApplyTransition(ctx, TransitionParams{
 		PaymentID: in.PaymentID,
 		To:        StatusProcessing,
 		EventTS:   s.now(),
@@ -72,13 +86,6 @@ func (s *Service) ProcessCharge(ctx context.Context, in ChargeTaskInput) error {
 		default:
 			return fmt.Errorf("process charge: transition to processing: %w", err)
 		}
-	}
-
-	prov, err := s.providers.Get(in.Provider)
-	if err != nil {
-		// Unregistered/misconfigured provider: genuinely unexpected,
-		// surfaced as an error so it reaches terminal_failures.
-		return err
 	}
 
 	breaker := s.breakerFor(in.Provider)

@@ -3,7 +3,9 @@ package queue
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
+	"time"
 )
 
 // Handler processes one dispatched task's payload. Matches the shape the
@@ -19,6 +21,20 @@ type Handler func(ctx context.Context, taskType string, payload []byte) error
 // (see dlq.go) instead of silently swallowing unexpected handler errors.
 type ErrorRecorder func(ctx context.Context, taskType, taskID string, payload []byte, err error)
 
+// memoryCloseGrace/memoryCloseForce bound Close's total wait: grace period
+// for in-flight handlers to finish on their own, then the shared context is
+// cancelled (a well-behaved Handler -- e.g. ProcessCharge's provider call --
+// observes ctx.Done() and returns promptly) and a second, shorter window is
+// given before Close gives up and returns anyway. Per the plan's graceful
+// shutdown rule ("masing-masing Shutdown(ctx) dengan timeout", "tidak ada
+// go func() liar tanpa owner/context-cancel"): every handler goroutine is
+// owned by this ctx, and Close is bounded rather than blocking forever on a
+// slow/stuck provider.
+const (
+	memoryCloseGrace = 5 * time.Second
+	memoryCloseForce = 2 * time.Second
+)
+
 // MemoryClient is the non-durable in-process fallback: Enqueue hands the
 // payload straight to the registered Handler on its own goroutine and
 // returns immediately. If the process crashes before that goroutine runs,
@@ -33,6 +49,9 @@ type MemoryClient struct {
 	handlers map[string]Handler
 	onError  ErrorRecorder
 
+	ctx    context.Context
+	cancel context.CancelFunc
+
 	wg     sync.WaitGroup
 	closed bool
 }
@@ -40,7 +59,8 @@ type MemoryClient struct {
 // NewMemoryClient builds a MemoryClient. onError may be nil (errors are
 // merely dropped, useful in tests that don't care).
 func NewMemoryClient(onError ErrorRecorder) *MemoryClient {
-	return &MemoryClient{handlers: make(map[string]Handler), onError: onError}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &MemoryClient{handlers: make(map[string]Handler), onError: onError, ctx: ctx, cancel: cancel}
 }
 
 // RegisterHandler wires h to process every task of the given type.
@@ -66,29 +86,52 @@ func (m *MemoryClient) Enqueue(ctx context.Context, taskType string, payload []b
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
-		// Deliberately not ctx from the caller: the caller here is the
-		// outbox relay's dispatch loop, whose context is scoped to one
-		// poll tick, not to the lifetime of the task it just handed off.
-		runCtx := context.Background()
-		if err := h(runCtx, taskType, payload); err != nil {
+		// Deliberately not ctx from the caller (the outbox relay's
+		// dispatch loop, scoped to one poll tick) -- this goroutine's
+		// owner is the MemoryClient itself, and its context is m.ctx,
+		// cancelled from Close. That is what makes this goroutine NOT a
+		// "go func() liar tanpa owner/context-cancel": it has an owner
+		// (MemoryClient) and a cancellation path (m.cancel via Close).
+		if err := h(m.ctx, taskType, payload); err != nil {
 			if m.onError != nil {
-				m.onError(runCtx, taskType, opts.TaskID, payload, err)
+				m.onError(m.ctx, taskType, opts.TaskID, payload, err)
 			}
 		}
 	}()
 	return nil
 }
 
-// Close waits for in-flight handler goroutines to finish and marks the
-// client closed to further Enqueue calls. Callers bound this with their own
-// shutdown timeout (see lifecycle.RunnerActor's interrupt path); Close
-// itself does not take a context because sync.WaitGroup has no
-// context-aware Wait.
+// Close marks the client closed to further Enqueue calls and waits for
+// in-flight handler goroutines to finish, bounded by memoryCloseGrace +
+// memoryCloseForce total: if handlers haven't finished within the grace
+// period, their shared context is cancelled (so a well-behaved Handler --
+// e.g. one built on ProcessCharge, whose provider call respects ctx.Done()
+// -- unwinds promptly), and Close gives up after one more short window
+// rather than blocking indefinitely on a stuck handler.
 func (m *MemoryClient) Close() error {
 	m.mu.Lock()
 	m.closed = true
 	m.mu.Unlock()
-	m.wg.Wait()
+
+	done := make(chan struct{})
+	go func() {
+		m.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-time.After(memoryCloseGrace):
+	}
+
+	m.cancel()
+
+	select {
+	case <-done:
+	case <-time.After(memoryCloseForce):
+		slog.Warn("queue: memory client close timed out waiting for in-flight handlers")
+	}
 	return nil
 }
 
