@@ -36,6 +36,25 @@ type Config struct {
 	// ForceError, if non-nil, is returned by every call in place of a
 	// normal response — simulates outright provider rejection/5xx.
 	ForceError error
+
+	// GetStatusAmountOverride / GetStatusCurrencyOverride, if non-zero /
+	// non-empty, force GetStatus to report these values instead of the
+	// amount/currency actually recorded from the Charge call that produced
+	// ProviderRef — used to simulate a PJP returning a mismatched
+	// amount/currency, exercising the reconciliation "never trust GetStatus
+	// blindly" rejection path (plan Decide Now item 11) without needing a
+	// real misbehaving provider.
+	GetStatusAmountOverride   int64
+	GetStatusCurrencyOverride string
+}
+
+// chargeRecord is what Charge remembers about a providerRef, so GetStatus
+// can report the SAME amount/currency a reconciliation caller must verify
+// against — a mock that always echoed back whatever amount the caller
+// asked about would never be able to exercise a real mismatch check.
+type chargeRecord struct {
+	amount   int64
+	currency string
 }
 
 // Mock is a provider.Provider implementation backed by in-memory state.
@@ -50,6 +69,7 @@ type Mock struct {
 	statusCalls  int
 	refundCalls  int
 	webhookCalls int
+	charges      map[string]chargeRecord
 }
 
 // New builds a Mock. If cfg.Status is empty, it defaults to
@@ -59,10 +79,33 @@ func New(cfg Config) *Mock {
 	if cfg.Status == "" {
 		cfg.Status = provider.StatusSucceeded
 	}
-	return &Mock{cfg: cfg}
+	return &Mock{cfg: cfg, charges: make(map[string]chargeRecord)}
 }
 
 func (m *Mock) Name() string { return m.cfg.Name }
+
+// SetStatus updates the status Charge/Authorize/Capture/Refund/GetStatus
+// report when neither ForceError nor a GetStatus override applies. Lets a
+// test flip the mock's simulated outcome mid-test -- e.g. reconciliation
+// tests that need "the provider was still processing when ProcessCharge
+// ran, but has since finished" -- without constructing a fresh Mock and
+// losing its per-providerRef charge-amount memory (used by GetStatus).
+func (m *Mock) SetStatus(status provider.Status) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cfg.Status = status
+}
+
+// SetGetStatusOverrides sets GetStatusAmountOverride/GetStatusCurrencyOverride
+// (see Config's doc comment) -- lets a test simulate a PJP's GetStatus
+// response mismatching the amount/currency actually charged, after
+// construction.
+func (m *Mock) SetGetStatusOverrides(amount int64, currency string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cfg.GetStatusAmountOverride = amount
+	m.cfg.GetStatusCurrencyOverride = currency
+}
 
 // wait blocks for cfg.Latency, returning ctx.Err() if the context is
 // cancelled/deadline-exceeded first — this is what makes ForceTimeout-style
@@ -155,6 +198,9 @@ func (m *Mock) Charge(ctx context.Context, req provider.ChargeRequest) (provider
 	}
 
 	ref := providerRef("chg", req.IdempotencyKey)
+	m.mu.Lock()
+	m.charges[ref] = chargeRecord{amount: req.Amount, currency: req.Currency}
+	m.mu.Unlock()
 	return provider.ChargeResponse{
 		ProviderRef: ref,
 		Status:      m.cfg.Status,
@@ -165,6 +211,7 @@ func (m *Mock) Charge(ctx context.Context, req provider.ChargeRequest) (provider
 func (m *Mock) GetStatus(ctx context.Context, req provider.GetStatusRequest) (provider.GetStatusResponse, error) {
 	m.mu.Lock()
 	m.statusCalls++
+	rec := m.charges[req.ProviderRef]
 	m.mu.Unlock()
 
 	if err := m.wait(ctx); err != nil {
@@ -174,8 +221,19 @@ func (m *Mock) GetStatus(ctx context.Context, req provider.GetStatusRequest) (pr
 		return provider.GetStatusResponse{}, m.cfg.ForceError
 	}
 
+	amount := rec.amount
+	currency := rec.currency
+	if m.cfg.GetStatusAmountOverride != 0 {
+		amount = m.cfg.GetStatusAmountOverride
+	}
+	if m.cfg.GetStatusCurrencyOverride != "" {
+		currency = m.cfg.GetStatusCurrencyOverride
+	}
+
 	return provider.GetStatusResponse{
 		Status:      m.cfg.Status,
+		Amount:      amount,
+		Currency:    currency,
 		RawResponse: rawResponse(map[string]any{"provider_ref": req.ProviderRef, "status": m.cfg.Status}),
 	}, nil
 }

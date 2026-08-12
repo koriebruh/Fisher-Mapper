@@ -1,0 +1,186 @@
+package config
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+)
+
+// fakeConfigSource is a configSource test double that can be told to fail
+// on command -- lets the fallback-on-refresh-failure behavior (the entire
+// reason Cache exists, per the plan: "Kalau DB gak bisa diakses pas
+// refresh, jatuh balik ke cache terakhir yang valid, bukan error total") be
+// exercised without a live Postgres connection. Guarded by a mutex since
+// TestCache_Run_ContinuesTickingAfterARefreshFailure mutates it from the
+// test goroutine while Cache.Run reads it from a background goroutine.
+type fakeConfigSource struct {
+	mu      sync.Mutex
+	values  map[string]string
+	fail    bool
+	calls   int
+	lastErr error
+}
+
+func (f *fakeConfigSource) GetAll(ctx context.Context) (map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	if f.fail {
+		if f.lastErr != nil {
+			return nil, f.lastErr
+		}
+		return nil, errors.New("fake: postgres unreachable")
+	}
+	// Return a copy so the test and the cache never alias the same map.
+	out := make(map[string]string, len(f.values))
+	for k, v := range f.values {
+		out[k] = v
+	}
+	return out, nil
+}
+
+func (f *fakeConfigSource) setFail(fail bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fail = fail
+}
+
+func (f *fakeConfigSource) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+func TestCache_Load_PopulatesValues(t *testing.T) {
+	src := &fakeConfigSource{values: map[string]string{"provider.mock.enabled": "true"}}
+	c := NewCache(src, time.Hour)
+
+	if err := c.Load(context.Background()); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !c.ProviderEnabled("mock") {
+		t.Error("ProviderEnabled(mock) = false after Load with provider.mock.enabled=true, want true")
+	}
+}
+
+// TestCache_Load_FailureAtStartupIsNotSwallowed is the advisor-flagged
+// distinction from refresh: at t=0 there is no last-known-good snapshot to
+// fall back to, so Load must propagate the error (the caller -- cmd/worker
+// -- decides to fail startup on it, consistent with db.NewPool already
+// hard-failing on its own Ping).
+func TestCache_Load_FailureAtStartupIsNotSwallowed(t *testing.T) {
+	src := &fakeConfigSource{fail: true}
+	c := NewCache(src, time.Hour)
+
+	if err := c.Load(context.Background()); err == nil {
+		t.Fatal("Load with a failing source = nil error, want an error (no last-known-good snapshot exists yet)")
+	}
+}
+
+// TestCache_Refresh_FallsBackToLastKnownGoodOnFailure is the central Fase 4
+// mandatory behavior: a refresh that fails (DB unreachable) must NOT clear
+// or corrupt the cache -- reads must keep returning whatever the last
+// successful load/refresh populated, and the failure must not propagate as
+// an error/panic to the caller (Refresh has no error return at all).
+func TestCache_Refresh_FallsBackToLastKnownGoodOnFailure(t *testing.T) {
+	src := &fakeConfigSource{values: map[string]string{"provider.mock.enabled": "false"}}
+	c := NewCache(src, time.Hour)
+	if err := c.Load(context.Background()); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.ProviderEnabled("mock") {
+		t.Fatal("ProviderEnabled(mock) = true after Load with provider.mock.enabled=false, want false")
+	}
+
+	// Simulate Postgres going unreachable mid-refresh.
+	src.fail = true
+	src.values["provider.mock.enabled"] = "true" // would flip the flag IF this refresh succeeded
+	c.Refresh(context.Background())
+
+	if c.ProviderEnabled("mock") {
+		t.Error("ProviderEnabled(mock) = true after a FAILED refresh, want it to still report the last-known-good value (false) -- fallback did not hold")
+	}
+
+	// Bring "Postgres" back and confirm refresh resumes.
+	src.fail = false
+	c.Refresh(context.Background())
+	if !c.ProviderEnabled("mock") {
+		t.Error("ProviderEnabled(mock) = false after refresh resumed with provider.mock.enabled=true, want true -- refresh did not resume")
+	}
+}
+
+// TestCache_Run_ContinuesTickingAfterARefreshFailure exercises the SAME
+// fallback guarantee through the actual background-refresh actor (Run) that
+// internal/lifecycle.RunnerActor wraps for oklog/run.Group in cmd/worker --
+// not just the one-shot Refresh helper -- proving a failed tick does not
+// stop the loop (no panic, no early return) and a later tick still
+// recovers.
+func TestCache_Run_ContinuesTickingAfterARefreshFailure(t *testing.T) {
+	src := &fakeConfigSource{values: map[string]string{"k": "v1"}, fail: true}
+	c := NewCache(src, 5*time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- c.Run(ctx) }()
+
+	// Let a few failing ticks happen -- Run must not exit or panic.
+	deadlineFail := time.Now().Add(100 * time.Millisecond)
+	for src.callCount() < 3 && time.Now().Before(deadlineFail) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if src.callCount() < 1 {
+		t.Fatal("Run did not attempt any refresh ticks")
+	}
+	if v, _ := c.Get("k"); v != "" {
+		t.Errorf("Get(k) = %q after only-failing refreshes (cache started empty), want empty", v)
+	}
+
+	// Recover: subsequent ticks should succeed and populate the cache.
+	src.setFail(false)
+	deadlineOK := time.Now().Add(200 * time.Millisecond)
+	for {
+		if v, ok := c.Get("k"); ok && v == "v1" {
+			break
+		}
+		if time.Now().After(deadlineOK) {
+			t.Fatal("cache never picked up the value after refresh recovered")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Run returned error %v after ctx cancellation, want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run did not return after ctx cancellation")
+	}
+}
+
+func TestCache_GetBool_DefaultsWhenKeyAbsent(t *testing.T) {
+	src := &fakeConfigSource{values: map[string]string{}}
+	c := NewCache(src, time.Hour)
+	if err := c.Load(context.Background()); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if !c.ProviderEnabled("never-configured") {
+		t.Error("ProviderEnabled for a provider with no app_config row = false, want true (default enabled)")
+	}
+}
+
+func TestCache_GetBool_InvalidValueUsesDefault(t *testing.T) {
+	src := &fakeConfigSource{values: map[string]string{"provider.mock.enabled": "not-a-bool"}}
+	c := NewCache(src, time.Hour)
+	if err := c.Load(context.Background()); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if !c.GetBool("provider.mock.enabled", true) {
+		t.Error("GetBool with an unparsable stored value did not fall back to the provided default")
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"Fisher-Mapper/internal/auth"
+	"Fisher-Mapper/internal/config"
 	"Fisher-Mapper/internal/domain/payment"
 	"Fisher-Mapper/internal/provider"
 	"Fisher-Mapper/internal/queue"
@@ -23,14 +24,20 @@ import (
 // single fiber.App. Providers/Verifiers/WebhookStore are Fase 3 additions
 // backing POST /webhooks/:provider; RateLimiter is optional (nil disables
 // the middleware entirely, e.g. in tests that don't care about it).
+// DynamicConfigStore/DynamicConfigCache/AdminAPIKey are Fase 4 additions
+// backing the /admin/config surface — DynamicConfigStore nil disables that
+// surface entirely (e.g. in tests that don't need it).
 type Deps struct {
-	Pool           *pgxpool.Pool
-	QueueClient    *asynq.Client
-	PaymentService *payment.Service
-	Providers      *provider.Registry
-	Verifiers      map[string]auth.Verifier
-	WebhookStore   *webhook.Store
-	RateLimiter    *ratelimit.Limiter
+	Pool               *pgxpool.Pool
+	QueueClient        *asynq.Client
+	PaymentService     *payment.Service
+	Providers          *provider.Registry
+	Verifiers          map[string]auth.Verifier
+	WebhookStore       *webhook.Store
+	RateLimiter        *ratelimit.Limiter
+	DynamicConfigStore *config.DynamicStore
+	DynamicConfigCache *config.Cache
+	AdminAPIKey        string
 }
 
 // NewApp builds the fiber app and registers all routes.
@@ -47,6 +54,7 @@ func NewApp(deps Deps) *fiber.App {
 			paymentGroup.Use(ratelimit.Middleware(deps.RateLimiter, nil))
 		}
 		RegisterPaymentRoutes(paymentGroup, PaymentDeps{Service: deps.PaymentService})
+		RegisterRefundRoutes(paymentGroup, PaymentDeps{Service: deps.PaymentService})
 	}
 
 	if deps.PaymentService != nil && deps.Providers != nil && deps.Verifiers != nil && deps.WebhookStore != nil {
@@ -55,6 +63,14 @@ func NewApp(deps Deps) *fiber.App {
 			Verifiers: deps.Verifiers,
 			Staging:   deps.WebhookStore,
 			Service:   deps.PaymentService,
+		})
+	}
+
+	if deps.DynamicConfigStore != nil {
+		RegisterAdminRoutes(app, AdminDeps{
+			Store:  deps.DynamicConfigStore,
+			Cache:  deps.DynamicConfigCache,
+			APIKey: deps.AdminAPIKey,
 		})
 	}
 

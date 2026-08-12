@@ -82,6 +82,52 @@ func (s *Store) FindUnprocessedByRef(ctx context.Context, providerName, provider
 	return out, nil
 }
 
+// ProviderRefPair is one distinct (provider, provider_ref) combination still
+// carrying unprocessed staged events.
+type ProviderRefPair struct {
+	Provider    string
+	ProviderRef string
+}
+
+// FindUnprocessedProviderRefs returns every distinct (provider, provider_ref)
+// pair among staged events not yet joined to a payment, excluding the
+// provider_ref = ” case (an event staged with no provider_ref at all has
+// nothing for a sweep to look up FindByProviderRef against — see package doc
+// on Join for the general shape).
+//
+// This backs the Fase 4 reconciliation sweep (plan: "sweep webhook events
+// staged with no provider_ref match yet ... explicitly left to Fase 4"):
+// Join only ever gets called for ONE (provider, providerRef) at
+// charge-processing time; a webhook that arrives for the same ref AFTER
+// that single call (e.g. a slightly-delayed second event) would otherwise
+// sit staged forever. The reconciliation job calls this periodically and
+// re-attempts Join for every pair still outstanding.
+func (s *Store) FindUnprocessedProviderRefs(ctx context.Context) ([]ProviderRefPair, error) {
+	const selectSQL = `
+		SELECT DISTINCT provider, provider_ref
+		FROM incoming_webhook_events
+		WHERE processed_at IS NULL AND provider_ref IS NOT NULL AND provider_ref <> ''`
+
+	rows, err := s.pool.Query(ctx, selectSQL)
+	if err != nil {
+		return nil, fmt.Errorf("webhook: find unprocessed provider refs: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ProviderRefPair
+	for rows.Next() {
+		var p ProviderRefPair
+		if err := rows.Scan(&p.Provider, &p.ProviderRef); err != nil {
+			return nil, fmt.Errorf("webhook: find unprocessed provider refs: scan: %w", err)
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("webhook: find unprocessed provider refs: %w", err)
+	}
+	return out, nil
+}
+
 // MarkProcessed records that a staged event has been joined to paymentID.
 func (s *Store) MarkProcessed(ctx context.Context, id, paymentID uuid.UUID) error {
 	const updateSQL = `UPDATE incoming_webhook_events SET processed_at = now(), payment_id = $1 WHERE id = $2`

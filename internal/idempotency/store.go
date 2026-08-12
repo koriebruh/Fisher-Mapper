@@ -1,8 +1,11 @@
 // Package idempotency implements the Idempotency-Key store: atomic insert
-// on a unique (tenant_id, idempotency_key) constraint — never
+// on a unique (tenant_id, scope, idempotency_key) constraint — never
 // check-then-insert, so two concurrent requests with the same key can never
-// both believe they "own" the request. See migration 00002 for the table
-// definition.
+// both believe they "own" the request. See migration 00002 for the base
+// table definition and migration 00005 for the scope column (Fase 4: "Refund
+// idempotency scope sendiri (distinct dari charge idempotency)" — without a
+// scope, a charge and a refund issued by the same tenant that happen to
+// reuse the same key string would collide).
 package idempotency
 
 import (
@@ -39,9 +42,19 @@ const (
 	StateConflict
 )
 
+// ScopeCharge and ScopeRefund are the two idempotency scopes Fase 4
+// distinguishes. Declared here (not in package payment) so this package's
+// call sites are self-documenting without importing payment for a string
+// constant.
+const (
+	ScopeCharge = "charge"
+	ScopeRefund = "refund"
+)
+
 // Record is a stored idempotency row.
 type Record struct {
 	TenantID           string
+	Scope              string
 	Key                string
 	FingerprintHash    string
 	Status             string
@@ -55,20 +68,23 @@ type ReserveResult struct {
 	Record *Record
 }
 
-// Store is the idempotency-key persistence interface.
+// Store is the idempotency-key persistence interface. scope (ScopeCharge /
+// ScopeRefund) is part of the identity of a key everywhere it appears —
+// two different scopes with the same (tenantID, key) never collide.
 type Store interface {
-	// Reserve atomically inserts a "reserved" row for (tenantID, key) if
-	// none exists, or reports the existing row's relationship to
+	// Reserve atomically inserts a "reserved" row for (tenantID, scope, key)
+	// if none exists, or reports the existing row's relationship to
 	// fingerprintHash (conflict / in-progress / completed) if one does.
-	Reserve(ctx context.Context, tenantID, key, fingerprintHash string) (ReserveResult, error)
+	Reserve(ctx context.Context, tenantID, scope, key, fingerprintHash string) (ReserveResult, error)
 
 	// Complete marks a reserved row as completed, storing the response so
 	// future replays with the same key+fingerprint return it verbatim.
-	Complete(ctx context.Context, tenantID, key string, statusCode int, body []byte) error
+	Complete(ctx context.Context, tenantID, scope, key string, statusCode int, body []byte) error
 
-	// Get fetches the current row for (tenantID, key), used by callers
-	// polling for another goroutine's in-progress reservation to finish.
-	Get(ctx context.Context, tenantID, key string) (*Record, error)
+	// Get fetches the current row for (tenantID, scope, key), used by
+	// callers polling for another goroutine's in-progress reservation to
+	// finish.
+	Get(ctx context.Context, tenantID, scope, key string) (*Record, error)
 }
 
 // PGStore is the pgx-backed Store implementation.
@@ -81,15 +97,15 @@ func NewPGStore(pool *pgxpool.Pool) *PGStore {
 	return &PGStore{pool: pool}
 }
 
-func (s *PGStore) Reserve(ctx context.Context, tenantID, key, fingerprintHash string) (ReserveResult, error) {
+func (s *PGStore) Reserve(ctx context.Context, tenantID, scope, key, fingerprintHash string) (ReserveResult, error) {
 	const insertSQL = `
-		INSERT INTO idempotency_keys (tenant_id, idempotency_key, fingerprint_hash, status)
-		VALUES ($1, $2, $3, 'reserved')
-		ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
+		INSERT INTO idempotency_keys (tenant_id, scope, idempotency_key, fingerprint_hash, status)
+		VALUES ($1, $2, $3, $4, 'reserved')
+		ON CONFLICT (tenant_id, scope, idempotency_key) DO NOTHING
 		RETURNING id`
 
 	var id string
-	err := s.pool.QueryRow(ctx, insertSQL, tenantID, key, fingerprintHash).Scan(&id)
+	err := s.pool.QueryRow(ctx, insertSQL, tenantID, scope, key, fingerprintHash).Scan(&id)
 	if err == nil {
 		// We won the atomic insert: nobody else has this key yet.
 		return ReserveResult{State: StateReserved}, nil
@@ -100,7 +116,7 @@ func (s *PGStore) Reserve(ctx context.Context, tenantID, key, fingerprintHash st
 
 	// ON CONFLICT DO NOTHING produced zero rows: a row already exists.
 	// Fetch it to decide conflict vs. in-progress vs. completed.
-	rec, err := s.Get(ctx, tenantID, key)
+	rec, err := s.Get(ctx, tenantID, scope, key)
 	if err != nil {
 		return ReserveResult{}, err
 	}
@@ -114,32 +130,32 @@ func (s *PGStore) Reserve(ctx context.Context, tenantID, key, fingerprintHash st
 	return ReserveResult{State: StateInProgress, Record: rec}, nil
 }
 
-func (s *PGStore) Complete(ctx context.Context, tenantID, key string, statusCode int, body []byte) error {
+func (s *PGStore) Complete(ctx context.Context, tenantID, scope, key string, statusCode int, body []byte) error {
 	const updateSQL = `
 		UPDATE idempotency_keys
 		SET status = 'completed', response_status_code = $1, response_body = $2, updated_at = now()
-		WHERE tenant_id = $3 AND idempotency_key = $4`
+		WHERE tenant_id = $3 AND scope = $4 AND idempotency_key = $5`
 
-	tag, err := s.pool.Exec(ctx, updateSQL, statusCode, body, tenantID, key)
+	tag, err := s.pool.Exec(ctx, updateSQL, statusCode, body, tenantID, scope, key)
 	if err != nil {
 		return fmt.Errorf("idempotency: complete: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("idempotency: complete: no row for tenant=%q key=%q", tenantID, key)
+		return fmt.Errorf("idempotency: complete: no row for tenant=%q scope=%q key=%q", tenantID, scope, key)
 	}
 	return nil
 }
 
-func (s *PGStore) Get(ctx context.Context, tenantID, key string) (*Record, error) {
+func (s *PGStore) Get(ctx context.Context, tenantID, scope, key string) (*Record, error) {
 	const selectSQL = `
-		SELECT tenant_id, idempotency_key, fingerprint_hash, status,
+		SELECT tenant_id, scope, idempotency_key, fingerprint_hash, status,
 		       coalesce(response_status_code, 0), coalesce(response_body, '{}'::jsonb)
 		FROM idempotency_keys
-		WHERE tenant_id = $1 AND idempotency_key = $2`
+		WHERE tenant_id = $1 AND scope = $2 AND idempotency_key = $3`
 
 	var rec Record
-	err := s.pool.QueryRow(ctx, selectSQL, tenantID, key).Scan(
-		&rec.TenantID, &rec.Key, &rec.FingerprintHash, &rec.Status,
+	err := s.pool.QueryRow(ctx, selectSQL, tenantID, scope, key).Scan(
+		&rec.TenantID, &rec.Scope, &rec.Key, &rec.FingerprintHash, &rec.Status,
 		&rec.ResponseStatusCode, &rec.ResponseBody,
 	)
 	if err != nil {

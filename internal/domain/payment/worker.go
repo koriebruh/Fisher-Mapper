@@ -55,6 +55,20 @@ type ChargeTaskInput struct {
 // genuinely unexpected failures (unregistered provider, a DB write
 // failing) that SHOULD land in terminal_failures for manual inspection.
 func (s *Service) ProcessCharge(ctx context.Context, in ChargeTaskInput) error {
+	// Checked BEFORE the CAS, same reasoning as the unregistered-provider
+	// check below: a disabled provider is a config condition that will
+	// fail identically on any redelivery, so there is nothing to gain by
+	// burning this payment's one CAS-guarded attempt on it. Returning an
+	// error here (not nil) is deliberate -- it lands this task in
+	// terminal_failures with its FULL payload (idempotency key,
+	// payment_method, metadata) intact, which is what makes it replayable
+	// once the provider is re-enabled. Leaving the payment "pending" (the
+	// CAS never ran) is the correct resting state for "never actually
+	// attempted", exactly like the unregistered-provider case.
+	if !s.isProviderEnabled(in.Provider) {
+		return apperror.New(apperror.CodeProviderDisabled, "process charge: provider "+in.Provider+" is disabled via dynamic config")
+	}
+
 	// Resolved BEFORE the CAS deliberately: an unregistered/misconfigured
 	// provider is a config error that will fail identically on any
 	// retry/redelivery, so there is nothing to gain by burning this
@@ -86,6 +100,19 @@ func (s *Service) ProcessCharge(ctx context.Context, in ChargeTaskInput) error {
 		default:
 			return fmt.Errorf("process charge: transition to processing: %w", err)
 		}
+	}
+
+	// Second check, "tepat sebelum manggil provider" per plan Fase 4: the
+	// flag may have flipped to disabled in the window between the check
+	// above and this point (including the time spent inside the CAS call).
+	// The CAS has already run by now, so unlike the check above, there is
+	// no cheap way back to "pending" here -- this is the documented,
+	// narrow race window left as a known gap (see ReconcilePayment's doc
+	// comment on payments stuck "processing" with no provider_ref), same
+	// category as the circuit-breaker-open skip immediately below.
+	if !s.isProviderEnabled(in.Provider) {
+		slog.Error("process charge: provider disabled between CAS and provider call, payment stuck processing with no provider_ref", "provider", in.Provider, "payment_id", in.PaymentID)
+		return nil
 	}
 
 	breaker := s.breakerFor(in.Provider)

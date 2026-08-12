@@ -29,12 +29,16 @@ func httpStatusFor(code apperror.Code) int {
 		return fiber.StatusConflict
 	case apperror.CodeTerminalState, apperror.CodeInvalidTransition, apperror.CodeStaleEvent:
 		return fiber.StatusConflict
+	case apperror.CodeRefundLimitExceeded:
+		return fiber.StatusConflict
 	case apperror.CodeProviderNotRegistered:
 		return fiber.StatusBadRequest
 	case apperror.CodeProviderTimeout:
 		return fiber.StatusGatewayTimeout
 	case apperror.CodeProviderError:
 		return fiber.StatusBadGateway
+	case apperror.CodeProviderDisabled:
+		return fiber.StatusServiceUnavailable
 	default:
 		return fiber.StatusInternalServerError
 	}

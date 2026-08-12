@@ -86,6 +86,14 @@ type Service struct {
 	staging         *webhook.Store
 	breakers        *circuitbreaker.Registry
 	bulkheadLimiter *bulkhead.Limiter
+
+	// providerEnabled is the Fase 4 dynamic-config provider-enabled check,
+	// injected as a plain func so this package never imports internal/config
+	// (which owns the cache/refresh machinery) -- keeps the domain layer's
+	// dependency graph exactly as narrow as it was before Fase 4. nil means
+	// "always enabled" (backward compatible: cmd/server's HTTP-only Service
+	// never sets this, and does not need to -- it never calls a provider).
+	providerEnabled func(providerName string) bool
 }
 
 // NewService builds a Service with production defaults.
@@ -123,6 +131,39 @@ func (s *Service) WithBulkhead(limiter *bulkhead.Limiter) *Service {
 	return s
 }
 
+// WithProviderEnabledCheck wires the Fase 4 dynamic-config provider-enabled
+// flag check into ProcessCharge/ProcessRefund. fn is called with a cache
+// read only (per plan: "idempotency yang cegah double-charge bukan flag
+// freshness" -- this check is a best-effort skip, not a strict gate; no live
+// DB round-trip happens per payment/refund). Returns s for chaining.
+func (s *Service) WithProviderEnabledCheck(fn func(providerName string) bool) *Service {
+	s.providerEnabled = fn
+	return s
+}
+
+// isProviderEnabled reports whether providerName is enabled, treating a
+// nil providerEnabled (not wired -- e.g. cmd/server's HTTP-only Service) as
+// always-enabled.
+func (s *Service) isProviderEnabled(providerName string) bool {
+	if s.providerEnabled == nil {
+		return true
+	}
+	return s.providerEnabled(providerName)
+}
+
+// refundRepo type-asserts s.repo to RefundRepository. Kept as a method
+// (not a stored field set at construction) so NewService's signature never
+// has to change -- every production Repository (*PGRepository) satisfies
+// both interfaces; a test double that only implements Repository and never
+// calls a refund method simply never exercises this path.
+func (s *Service) refundRepo() (RefundRepository, error) {
+	rr, ok := s.repo.(RefundRepository)
+	if !ok {
+		return nil, apperror.New(apperror.CodeInternal, "payment: repository does not support refunds")
+	}
+	return rr, nil
+}
+
 // CreatePayment creates a payment via the "charge" (auth+capture in one
 // call) flow, idempotent on (tenantID, idempotencyKey, fingerprint of
 // rawBody):
@@ -147,7 +188,7 @@ func (s *Service) CreatePayment(ctx context.Context, in CreatePaymentInput, idem
 
 	fingerprint := fingerprintOf(rawBody)
 
-	reserve, err := s.idem.Reserve(ctx, in.TenantID, idempotencyKey, fingerprint)
+	reserve, err := s.idem.Reserve(ctx, in.TenantID, idempotency.ScopeCharge, idempotencyKey, fingerprint)
 	if err != nil {
 		return CreatePaymentOutput{}, fmt.Errorf("create payment: reserve idempotency key: %w", err)
 	}
@@ -165,7 +206,7 @@ func (s *Service) CreatePayment(ctx context.Context, in CreatePaymentInput, idem
 		return out, nil
 
 	case idempotency.StateInProgress:
-		if out, ok := s.pollForCompletion(ctx, in.TenantID, idempotencyKey); ok {
+		if out, ok := s.pollForCompletion(ctx, in.TenantID, idempotency.ScopeCharge, idempotencyKey); ok {
 			out.Replayed = true
 			return out, nil
 		}
@@ -294,13 +335,13 @@ func (s *Service) completeIdempotency(ctx context.Context, tenantID, key string,
 	if err != nil {
 		return fmt.Errorf("create payment: marshal response for idempotency store: %w", err)
 	}
-	if err := s.idem.Complete(ctx, tenantID, key, statusCode, body); err != nil {
+	if err := s.idem.Complete(ctx, tenantID, idempotency.ScopeCharge, key, statusCode, body); err != nil {
 		return fmt.Errorf("create payment: complete idempotency record: %w", err)
 	}
 	return nil
 }
 
-func (s *Service) pollForCompletion(ctx context.Context, tenantID, key string) (CreatePaymentOutput, bool) {
+func (s *Service) pollForCompletion(ctx context.Context, tenantID, scope, key string) (CreatePaymentOutput, bool) {
 	deadline := time.Now().Add(s.inProgressPollTimeout)
 	ticker := time.NewTicker(s.inProgressPollInterval)
 	defer ticker.Stop()
@@ -312,7 +353,7 @@ func (s *Service) pollForCompletion(ctx context.Context, tenantID, key string) (
 		case <-ticker.C:
 		}
 
-		rec, err := s.idem.Get(ctx, tenantID, key)
+		rec, err := s.idem.Get(ctx, tenantID, scope, key)
 		if err != nil {
 			continue
 		}

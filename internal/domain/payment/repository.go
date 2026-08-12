@@ -91,6 +91,11 @@ type Repository interface {
 	// withTx returning an error rolls back the whole transaction, including
 	// the payment insert.
 	CreateWithOutbox(ctx context.Context, p *Payment, withTx func(ctx context.Context, tx pgx.Tx) error) error
+
+	// ListProcessingOlderThan returns payments in StatusProcessing whose
+	// last_event_at is older than cutoff — the Fase 4 reconciliation job's
+	// "poll processing stuck past some threshold" query (plan Fase 4).
+	ListProcessingOlderThan(ctx context.Context, cutoff time.Time) ([]*Payment, error)
 }
 
 // PGRepository is the pgx-backed Repository implementation.
@@ -253,6 +258,37 @@ func (r *PGRepository) SetProviderRef(ctx context.Context, id uuid.UUID, provide
 		return apperror.New(apperror.CodeNotFound, "payment: not found")
 	}
 	return nil
+}
+
+func (r *PGRepository) ListProcessingOlderThan(ctx context.Context, cutoff time.Time) ([]*Payment, error) {
+	const selectSQL = `
+		SELECT id, tenant_id, livemode, currency, amount, operation_type, provider,
+		       provider_ref, status, last_event_at, created_at, updated_at
+		FROM payments
+		WHERE status = 'processing' AND last_event_at < $1
+		ORDER BY last_event_at`
+
+	rows, err := r.pool.Query(ctx, selectSQL, cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("payment: list processing older than: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*Payment
+	for rows.Next() {
+		p := &Payment{}
+		if err := rows.Scan(
+			&p.ID, &p.TenantID, &p.Livemode, &p.Currency, &p.Amount, &p.OperationType, &p.Provider,
+			&p.ProviderRef, &p.Status, &p.LastEventAt, &p.CreatedAt, &p.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("payment: list processing older than: scan: %w", err)
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("payment: list processing older than: %w", err)
+	}
+	return out, nil
 }
 
 // Seen implements auth.DedupChecker so an HMACVerifier can be wired

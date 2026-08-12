@@ -64,6 +64,22 @@ const (
 	// signature, timestamp outside the allowed skew window).
 	CodeUnauthorized Code = "unauthorized"
 
+	// CodeProviderDisabled: the dynamic-config provider-enabled flag was off
+	// for this provider at the time a charge/refund task was picked up.
+	// Fase 4 mitigation, checked both at outbox-relay dispatch time and
+	// again immediately before the provider call inside
+	// payment.Service.ProcessCharge/ProcessRefund. Returned (not swallowed
+	// as nil) when caught BEFORE the pending->processing CAS, so the task
+	// lands in terminal_failures with its full payload intact — replayable
+	// once the provider is re-enabled — rather than leaving the payment
+	// stuck "processing" with no provider_ref to reconcile against.
+	CodeProviderDisabled Code = "provider_disabled"
+
+	// CodeRefundLimitExceeded: sum(refunds already pending/processing/
+	// succeeded for a payment) + this refund's amount would exceed the
+	// original charge amount. Plan Decide Now item 10.
+	CodeRefundLimitExceeded Code = "refund_limit_exceeded"
+
 	// CodeInternal: anything else (unexpected DB error, etc).
 	CodeInternal Code = "internal"
 )

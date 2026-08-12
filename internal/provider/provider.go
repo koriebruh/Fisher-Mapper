@@ -93,8 +93,16 @@ type GetStatusRequest struct {
 	ProviderRef string
 }
 
+// GetStatusResponse includes Amount/Currency (added in Fase 4) precisely so
+// reconciliation can verify them against the payment it stored BEFORE
+// trusting this response enough to mark anything succeeded (plan Decide Now
+// item 11: "Verifikasi amount+currency yang dibalikin PJP cocok sama yang
+// diminta, sebelum mark succeeded") -- Status alone is not enough to act on
+// safely.
 type GetStatusResponse struct {
 	Status      Status
+	Amount      int64
+	Currency    string
 	RawResponse []byte
 }
 

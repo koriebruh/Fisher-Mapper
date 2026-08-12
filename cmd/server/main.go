@@ -34,11 +34,19 @@ import (
 	"Fisher-Mapper/internal/lifecycle"
 	"Fisher-Mapper/internal/queue"
 	"Fisher-Mapper/internal/ratelimit"
+	"Fisher-Mapper/internal/secrets/env"
 	"Fisher-Mapper/internal/transport/rest"
 	"Fisher-Mapper/internal/webhook"
 )
 
 const serviceName = "fisher-mapper"
+
+// serverDynamicConfigRefreshInterval governs only THIS process's own Cache
+// (used to serve /admin/config's GET and to best-effort-refresh right after
+// a write) -- it has no bearing on how quickly cmd/worker's enforcement
+// points observe a change; that is bounded by the worker's own Cache.Run
+// interval, since they are different processes sharing only the DB.
+const serverDynamicConfigRefreshInterval = 30 * time.Second
 
 func main() {
 	if err := run_(); err != nil {
@@ -109,16 +117,42 @@ func run_() error {
 	webhookStore := webhook.NewStore(pool)
 	limiter := ratelimit.New(20, 40) // stub-cheap default: 20 req/s, burst 40, per client/API key
 
-	// 6. Transport: single fiber app with health + payment + webhook
-	// endpoints.
+	// Fase 4 dynamic config: this process only ever WRITES app_config (via
+	// the admin endpoint below) and reads it back for that endpoint's GET
+	// -- it never gates a provider call itself (create-payment never calls
+	// a provider), so unlike cmd/worker it does not need to fail startup on
+	// Load failing; a best-effort initial load is enough, and if it fails
+	// the admin GET/PUT endpoints simply hit Postgres directly on demand
+	// (DynamicStore.GetAll/SetWithAudit don't depend on the cache at all).
+	dynamicStore := config.NewDynamicStore(pool)
+	dynamicCache := config.NewCache(dynamicStore, serverDynamicConfigRefreshInterval)
+	if err := dynamicCache.Load(ctx); err != nil {
+		logger.Warn("initial dynamic config load failed, /admin/config still works (reads Postgres directly)", "error", err)
+	}
+
+	// Admin API key: same secrets.Secrets (env impl) pattern as the mock
+	// webhook secret in bootstrap.RegisterVerifiers -- a documented,
+	// local-dev-only fallback when unset, per the plan's "RBAC sederhana"
+	// framing (one shared credential, not a full permission system).
+	secretsStore := env.New("")
+	adminAPIKey := secretsStore.GetSecret("admin_api_key")
+	if adminAPIKey == "" {
+		adminAPIKey = "dev-only-admin-key"
+	}
+
+	// 6. Transport: single fiber app with health + payment + webhook +
+	// admin-config endpoints.
 	app := rest.NewApp(rest.Deps{
-		Pool:           pool,
-		QueueClient:    queueClient,
-		PaymentService: paymentService,
-		Providers:      providers,
-		Verifiers:      verifiers,
-		WebhookStore:   webhookStore,
-		RateLimiter:    limiter,
+		Pool:               pool,
+		QueueClient:        queueClient,
+		PaymentService:     paymentService,
+		Providers:          providers,
+		Verifiers:          verifiers,
+		WebhookStore:       webhookStore,
+		RateLimiter:        limiter,
+		DynamicConfigStore: dynamicStore,
+		DynamicConfigCache: dynamicCache,
+		AdminAPIKey:        adminAPIKey,
 	})
 
 	addr := fmt.Sprintf(":%d", cfg.HTTP.Port)
@@ -129,6 +163,18 @@ func run_() error {
 
 	fiberExecute, fiberInterrupt := lifecycle.FiberActor(app, addr, 5*time.Second)
 	g.Add(fiberExecute, fiberInterrupt)
+
+	// Fase 4 dynamic config watcher: without this actor, serverDynamicConfigRefreshInterval
+	// drives no ticker at all -- this process's Cache would only ever update
+	// via the admin PUT handler's best-effort post-write Refresh. The plan
+	// lists "dynamic-config watcher" as an oklog/run actor unconditionally
+	// (every long-running process that owns a Cache runs it), so this
+	// process gets the same periodic background refresh cmd/worker does,
+	// even though today nothing in cmd/server reads the cache on the hot
+	// path (a future admin-surface read of the cache, or another
+	// cache-backed feature added to this process, gets it for free).
+	dynConfigExecute, dynConfigInterrupt := lifecycle.RunnerActor(dynamicCache.Run)
+	g.Add(dynConfigExecute, dynConfigInterrupt)
 
 	logger.Info("starting server", "addr", addr)
 	if err := g.Run(); err != nil && !errors.Is(err, run.ErrSignal) {

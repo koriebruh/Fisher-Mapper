@@ -2,12 +2,33 @@ package outbox
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"time"
 
 	"Fisher-Mapper/internal/queue"
 )
+
+// providerCarryingTaskTypes are the outbox task types whose payload has a
+// "provider" JSON field the Fase 4 provider-enabled check can read -- both
+// charge and refund tasks (queue.TaskTypeCharge / queue.TaskTypeRefund)
+// carry one (see payment.ChargeTaskInput / payment.RefundTaskInput). Kept
+// as a set here, rather than importing package payment for the struct
+// shape, to avoid an outbox<->payment import cycle (payment already
+// imports outbox to build these very rows).
+var providerCarryingTaskTypes = map[string]bool{
+	queue.TaskTypeCharge: true,
+	queue.TaskTypeRefund: true,
+}
+
+// providerCarrier is the minimal shape shared by ChargeTaskInput and
+// RefundTaskInput needed to extract the provider name from a raw payload
+// without importing package payment.
+type providerCarrier struct {
+	Provider string `json:"provider"`
+}
 
 // Relay periodically drains pending outbox rows to a queue.Client. It is
 // the actor internal/lifecycle.RunnerActor wraps for oklog/run.Group.
@@ -17,6 +38,13 @@ type Relay struct {
 	baseInterval time.Duration
 	maxInterval  time.Duration
 	batchSize    int
+
+	// providerEnabled is the Fase 4 dynamic-config check (plan: "worker
+	// WAJIB cek ulang flag provider-enabled ... bukan cuma dicek sekali pas
+	// enqueue" -- this is the enqueue-time half of that requirement, the
+	// other half being payment.Service.ProcessCharge/ProcessRefund's own
+	// check right before the provider call). nil means "always enabled".
+	providerEnabled func(providerName string) bool
 }
 
 // NewRelay builds a Relay. baseInterval is the poll cadence while dispatch
@@ -37,6 +65,13 @@ func NewRelay(store *Store, client queue.Client, baseInterval, maxInterval time.
 		batchSize = 50
 	}
 	return &Relay{store: store, client: client, baseInterval: baseInterval, maxInterval: maxInterval, batchSize: batchSize}
+}
+
+// WithProviderEnabledCheck wires the Fase 4 provider-enabled cache check
+// into dispatchOne. Returns r for chaining.
+func (r *Relay) WithProviderEnabledCheck(fn func(providerName string) bool) *Relay {
+	r.providerEnabled = fn
+	return r
 }
 
 // Run polls until ctx is done.
@@ -89,14 +124,35 @@ func (r *Relay) backoff(current time.Duration) time.Duration {
 }
 
 // dispatchOne is the per-row dispatch callback DispatchBatch invokes,
-// deciding EnqueueOptions from the row's task type: TaskTypeCharge gets
-// MaxRetry(0) (plan: "charge task no-auto-retry, task lain retry normal"),
-// everything else keeps the queue's default retry behavior. It never calls
-// a provider -- see the invariant documented in store.go's package doc and
-// in payment.Service.ProcessCharge.
+// deciding EnqueueOptions from the row's task type: TaskTypeCharge and
+// TaskTypeRefund both get MaxRetry(0) (plan: "charge task no-auto-retry,
+// task lain retry normal" -- refund carries the identical double-provider-
+// call risk, per the Fase 4 task instructions, so it gets the same
+// treatment), everything else keeps the queue's default retry behavior. It
+// never calls a provider -- see the invariant documented in store.go's
+// package doc and in payment.Service.ProcessCharge/ProcessRefund.
+//
+// Fase 4 addition: for charge/refund rows, checks the dynamic-config
+// provider-enabled flag BEFORE enqueueing. Returning an error here (rather
+// than silently dropping the row) is exactly what DispatchBatch already
+// does for a failed dispatch attempt -- the row stays 'pending', attempts
+// increments, last_error records why, and the relay's own retry-with-
+// backoff loop naturally re-attempts it on a later tick, which is also
+// exactly what makes "flip the flag back on" self-heal without any extra
+// mechanism.
 func (r *Relay) dispatchOne(ctx context.Context, row Row) error {
+	if r.providerEnabled != nil && providerCarryingTaskTypes[row.TaskType] {
+		var carrier providerCarrier
+		if err := json.Unmarshal(row.Payload, &carrier); err != nil {
+			return fmt.Errorf("outbox: dispatch: decode provider from payload: %w", err)
+		}
+		if carrier.Provider != "" && !r.providerEnabled(carrier.Provider) {
+			return fmt.Errorf("outbox: dispatch: provider %q is disabled via dynamic config", carrier.Provider)
+		}
+	}
+
 	opts := queue.EnqueueOptions{TaskID: row.ID.String()}
-	if row.TaskType == queue.TaskTypeCharge {
+	if row.TaskType == queue.TaskTypeCharge || row.TaskType == queue.TaskTypeRefund {
 		zero := 0
 		opts.MaxRetry = &zero
 	}

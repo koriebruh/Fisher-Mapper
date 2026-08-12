@@ -35,6 +35,7 @@ import (
 	"Fisher-Mapper/internal/lifecycle"
 	"Fisher-Mapper/internal/outbox"
 	"Fisher-Mapper/internal/queue"
+	"Fisher-Mapper/internal/reconciliation"
 	"Fisher-Mapper/internal/webhook"
 )
 
@@ -53,6 +54,18 @@ const (
 	relayMaxInterval        = 30 * time.Second
 	relayBatchSize          = 50
 	redisHealthInterval     = 2 * time.Second
+
+	// Fase 4 dynamic config: refreshInterval is deliberately short (rather
+	// than, say, a minute) so the plan's "behavior berubah tanpa restart
+	// (dalam interval refresh)" validation step is observable in a
+	// reasonable amount of time -- a template default, tune per deployment.
+	dynamicConfigRefreshInterval = 5 * time.Second
+
+	// Fase 4 reconciliation: pollInterval is how often the job runs;
+	// stuckThreshold is how long a payment must have sat in "processing"
+	// (since its last applied event) before the job will touch it at all.
+	reconciliationPollInterval   = 15 * time.Second
+	reconciliationStuckThreshold = 1 * time.Minute
 )
 
 func main() {
@@ -91,9 +104,23 @@ func run_() error {
 	defer pool.Close()
 	logger.Info("connected to postgres")
 
+	// Fase 4 dynamic config: loaded AFTER the Postgres connection above,
+	// per the plan's fixed startup order. The initial Load is synchronous
+	// and fails startup on error (there is no last-known-good snapshot at
+	// t=0, consistent with db.NewPool already hard-failing on its own
+	// Ping) -- every refresh AFTER this one falls back to the last-known-
+	// good snapshot instead (see internal/config.Cache.Run).
+	dynamicStore := config.NewDynamicStore(pool)
+	dynamicCache := config.NewCache(dynamicStore, dynamicConfigRefreshInterval)
+	if err := dynamicCache.Load(ctx); err != nil {
+		return fmt.Errorf("load dynamic config: %w", err)
+	}
+	logger.Info("loaded dynamic config")
+
 	// Domain wiring -- identical construction to cmd/server, plus the
-	// worker-only pieces (webhook staging join, circuit breaker, bulkhead)
-	// wired via the With* setters.
+	// worker-only pieces (webhook staging join, circuit breaker, bulkhead,
+	// and now the Fase 4 provider-enabled check) wired via the With*
+	// setters.
 	providers := bootstrap.RegisterProviders()
 	idemStore := idempotency.NewPGStore(pool)
 	paymentRepo := payment.NewPGRepository(pool)
@@ -104,7 +131,8 @@ func run_() error {
 	paymentService := payment.NewService(paymentRepo, idemStore, providers).
 		WithWebhookStaging(webhookStore).
 		WithCircuitBreakers(breakers).
-		WithBulkhead(bulkheadLimiter)
+		WithBulkhead(bulkheadLimiter).
+		WithProviderEnabledCheck(dynamicCache.ProviderEnabled)
 
 	chargeHandler := func(ctx context.Context, payload []byte) error {
 		var in payment.ChargeTaskInput
@@ -112,6 +140,14 @@ func run_() error {
 			return fmt.Errorf("worker: unmarshal charge task payload: %w", err)
 		}
 		return paymentService.ProcessCharge(ctx, in)
+	}
+
+	refundHandler := func(ctx context.Context, payload []byte) error {
+		var in payment.RefundTaskInput
+		if err := json.Unmarshal(payload, &in); err != nil {
+			return fmt.Errorf("worker: unmarshal refund task payload: %w", err)
+		}
+		return paymentService.ProcessRefund(ctx, in)
 	}
 
 	// Queue: durable asynq client + non-durable memory fallback, switching
@@ -123,6 +159,9 @@ func run_() error {
 	memoryClient.RegisterHandler(queue.TaskTypeCharge, func(ctx context.Context, _ string, payload []byte) error {
 		return chargeHandler(ctx, payload)
 	})
+	memoryClient.RegisterHandler(queue.TaskTypeRefund, func(ctx context.Context, _ string, payload []byte) error {
+		return refundHandler(ctx, payload)
+	})
 
 	asynqClient := queue.NewAsynqClient(cfg.Redis.Addr)
 	redisHealth := queue.NewRedisHealthChecker(cfg.Redis.Addr, redisHealthInterval)
@@ -133,19 +172,33 @@ func run_() error {
 		}
 	}()
 
-	// Outbox relay: Postgres -> switchingClient.
+	// Outbox relay: Postgres -> switchingClient. WithProviderEnabledCheck
+	// wires the Fase 4 enqueue-time half of the provider-enabled check (the
+	// other half, right before the actual provider call, lives inside
+	// paymentService.ProcessCharge/ProcessRefund above).
 	outboxStore := outbox.NewStore(pool)
-	relay := outbox.NewRelay(outboxStore, switchingClient, relayBaseInterval, relayMaxInterval, relayBatchSize)
+	relay := outbox.NewRelay(outboxStore, switchingClient, relayBaseInterval, relayMaxInterval, relayBatchSize).
+		WithProviderEnabledCheck(dynamicCache.ProviderEnabled)
 
 	// asynq task server: the real (Redis-backed) consumption side. The
 	// memory fallback's consumption side is memoryClient itself (it
 	// invokes the handler directly on Enqueue) -- both paths share
-	// chargeHandler, so behavior (including the no-retry invariant) is
-	// identical regardless of which transport carried the task.
+	// chargeHandler/refundHandler, so behavior (including the no-retry
+	// invariant) is identical regardless of which transport carried the
+	// task.
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(queue.TaskTypeCharge, func(ctx context.Context, task *asynq.Task) error {
 		return chargeHandler(ctx, task.Payload())
 	})
+	mux.HandleFunc(queue.TaskTypeRefund, func(ctx context.Context, task *asynq.Task) error {
+		return refundHandler(ctx, task.Payload())
+	})
+
+	// Fase 4 reconciliation job: polls payments stuck "processing" past
+	// reconciliationStuckThreshold and sweeps staged webhook events with no
+	// matching payment yet. See internal/reconciliation and
+	// internal/domain/payment/reconcile.go.
+	reconciler := reconciliation.New(paymentService, reconciliationPollInterval, reconciliationStuckThreshold)
 
 	asynqServer := asynq.NewServer(
 		asynq.RedisClientOpt{Addr: cfg.Redis.Addr},
@@ -164,6 +217,12 @@ func run_() error {
 
 	asynqExecute, asynqInterrupt := lifecycle.AsynqServerActor(asynqServer, mux)
 	g.Add(asynqExecute, asynqInterrupt)
+
+	dynConfigExecute, dynConfigInterrupt := lifecycle.RunnerActor(dynamicCache.Run)
+	g.Add(dynConfigExecute, dynConfigInterrupt)
+
+	reconcileExecute, reconcileInterrupt := lifecycle.RunnerActor(reconciler.Run)
+	g.Add(reconcileExecute, reconcileInterrupt)
 
 	logger.Info("starting worker", "redis_addr", cfg.Redis.Addr)
 	if err := g.Run(); err != nil && !errors.Is(err, run.ErrSignal) {

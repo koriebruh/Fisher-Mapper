@@ -27,6 +27,12 @@ import (
 // package for the constant when building outbox rows.
 const TaskTypeCharge = "charge"
 
+// TaskTypeRefund identifies the "process refund" task (Fase 4): a provider
+// call exactly like charge, subject to the identical no-auto-retry
+// invariant -- once dispatched, retrying it blindly risks a double refund,
+// so it gets the same MaxRetry(0) treatment in outbox.Relay.dispatchOne.
+const TaskTypeRefund = "refund"
+
 // EnqueueOptions carries the per-dispatch options a Client.Enqueue call
 // needs. MaxRetry, when non-nil, overrides the queue's default retry count
 // for this one task -- the relay sets it to 0 for TaskTypeCharge and leaves
