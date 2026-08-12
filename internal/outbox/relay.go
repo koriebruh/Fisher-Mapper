@@ -45,6 +45,15 @@ type Relay struct {
 	// other half being payment.Service.ProcessCharge/ProcessRefund's own
 	// check right before the provider call). nil means "always enabled".
 	providerEnabled func(providerName string) bool
+
+	// queueName is called once per dispatch to get the asynq queue to
+	// enqueue into. nil or "" means asynq's implicit default queue. Wired
+	// as a func (not a plain string) so the relay can pick up a config
+	// change without restart, exactly like providerEnabled -- but see
+	// cmd/worker/main.go: it deliberately snapshots this to a fixed value
+	// once at boot instead, because the consuming asynq.Server's queue set
+	// is fixed at construction and cannot be changed live.
+	queueName func() string
 }
 
 // NewRelay builds a Relay. baseInterval is the poll cadence while dispatch
@@ -71,6 +80,13 @@ func NewRelay(store *Store, client queue.Client, baseInterval, maxInterval time.
 // into dispatchOne. Returns r for chaining.
 func (r *Relay) WithProviderEnabledCheck(fn func(providerName string) bool) *Relay {
 	r.providerEnabled = fn
+	return r
+}
+
+// WithQueueName wires the queue-name getter into dispatchOne. Returns r for
+// chaining.
+func (r *Relay) WithQueueName(fn func() string) *Relay {
+	r.queueName = fn
 	return r
 }
 
@@ -155,6 +171,9 @@ func (r *Relay) dispatchOne(ctx context.Context, row Row) error {
 	if row.TaskType == queue.TaskTypeCharge || row.TaskType == queue.TaskTypeRefund {
 		zero := 0
 		opts.MaxRetry = &zero
+	}
+	if r.queueName != nil {
+		opts.QueueName = r.queueName()
 	}
 	return r.client.Enqueue(ctx, row.TaskType, row.Payload, opts)
 }

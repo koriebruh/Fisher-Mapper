@@ -11,7 +11,6 @@ package bootstrap
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -24,34 +23,32 @@ import (
 )
 
 // Observability bundles what Register produces so main() can use the
-// logger and shut tracing down on exit.
+// logger, reconcile the tracer against dynamic config once Postgres is up,
+// and shut tracing down on exit.
 type Observability struct {
-	Logger         *slog.Logger
-	ShutdownTracer func(context.Context) error
+	Logger *slog.Logger
+	Tracer *observability.TracerManager
 }
 
-// RegisterObservability performs the Phase 1 observability registration,
-// in order:
-//  1. build the redacting slog.Logger and install it as slog.Default()
-//  2. build the OTel tracer provider (stdout exporter) and install it as
-//     the global tracer provider
+// RegisterObservability performs the Phase 1 observability registration, in
+// order: (1) build the redacting slog.Logger and install it as
+// slog.Default(); (2) build the tracer provider, gated by otelEnabled.
 //
-// This must run before any other actor (fiber server, DB pool, queue
-// client) starts, so every subsequent log line and span goes through the
-// configured logger/provider rather than the library defaults.
-func RegisterObservability(ctx context.Context, cfg config.Bootstrap, serviceName string) (Observability, error) {
+// otelEnabled comes from config.LoadDynamicSeed(config.toml), not
+// Postgres app_config -- this call happens before any connection exists
+// (see cmd/server/main.go's startup order), so the live dynamic-config row
+// is not readable yet. Once it is, callers reconcile via
+// Observability.Tracer.Reconcile. Never returns an error for the tracer
+// half: a tracing failure is diagnostic, not something that should abort
+// process startup (TracerManager falls back to a no-op provider on error
+// internally).
+func RegisterObservability(ctx context.Context, cfg config.Bootstrap, serviceName string, otelEnabled bool) Observability {
 	logger := observability.NewLogger(cfg.Log.Level)
 	slog.SetDefault(logger)
 
-	shutdownTracer, err := observability.SetupTracerProvider(ctx, serviceName)
-	if err != nil {
-		return Observability{}, fmt.Errorf("bootstrap: register tracer provider: %w", err)
-	}
+	tracer := observability.NewTracerManager(ctx, serviceName, otelEnabled)
 
-	return Observability{
-		Logger:         logger,
-		ShutdownTracer: shutdownTracer,
-	}, nil
+	return Observability{Logger: logger, Tracer: tracer}
 }
 
 // RegisterProviders builds the PJP provider registry and registers every
@@ -74,14 +71,20 @@ func RegisterProviders() *provider.Registry {
 //
 // Secret lookup goes through the secrets.Secrets interface (env impl) per
 // the plan's "stub cheap" secrets-manager item, so swapping to a real
-// secrets manager later never touches this call site. PROVIDER_MOCK_SECRET
-// unset falls back to a fixed local-dev default -- documented, not meant
-// for anything resembling production use.
+// secrets manager later never touches this call site. If
+// PROVIDER_MOCK_SECRET is unset, "mock" is deliberately left OUT of the
+// returned map rather than falling back to any fixed literal: a hardcoded
+// fallback secret would let anyone who has read this source forge a valid
+// webhook signature and push a payment to "succeeded". POST
+// /webhooks/mock already fails closed (401 "no verifier configured") when a
+// provider has no map entry -- see rest/webhook.go -- so omitting the entry
+// is sufficient, no separate route-disabling logic needed.
 func RegisterVerifiers(dedup auth.DedupChecker) map[string]auth.Verifier {
 	secretsStore := env.New("")
 	mockSecret := secretsStore.GetSecret("provider_mock_secret")
 	if mockSecret == "" {
-		mockSecret = "dev-only-mock-webhook-secret"
+		slog.Warn("provider_mock_secret not configured; POST /webhooks/mock will reject every request (401) until it is set")
+		return map[string]auth.Verifier{}
 	}
 
 	return map[string]auth.Verifier{

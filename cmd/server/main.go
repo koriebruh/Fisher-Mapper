@@ -65,17 +65,23 @@ func run_() error {
 		return fmt.Errorf("load bootstrap config: %w", err)
 	}
 
+	// dynSeed carries the otel_enabled seed value only -- read directly from
+	// config.toml because the tracer (step 2 below) is created before
+	// Postgres connects, so there is no app_config row to read yet. See
+	// config.DynamicSeed's doc for why this is a deliberate exception.
+	dynSeed, err := config.LoadDynamicSeed(configPath())
+	if err != nil {
+		return fmt.Errorf("load dynamic config seed: %w", err)
+	}
+
 	// 2. Observability: logger + tracer provider, registered explicitly
 	// and in order before anything else connects or logs.
-	obs, err := bootstrap.RegisterObservability(ctx, cfg, serviceName)
-	if err != nil {
-		return fmt.Errorf("register observability: %w", err)
-	}
+	obs := bootstrap.RegisterObservability(ctx, cfg, serviceName, dynSeed.OtelEnabled)
 	logger := obs.Logger
 	defer func() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
-		if err := obs.ShutdownTracer(shutdownCtx); err != nil {
+		if err := obs.Tracer.Shutdown(shutdownCtx); err != nil {
 			logger.Error("shutdown tracer provider", "error", err)
 		}
 	}()
@@ -128,16 +134,25 @@ func run_() error {
 	dynamicCache := config.NewCache(dynamicStore, serverDynamicConfigRefreshInterval)
 	if err := dynamicCache.Load(ctx); err != nil {
 		logger.Warn("initial dynamic config load failed, /admin/config still works (reads Postgres directly)", "error", err)
+	} else {
+		// Now that Postgres is reachable, the live app_config row (if any)
+		// is the real source of truth for the OTel toggle -- reconcile the
+		// tracer installed at step 2 against it. One-shot, not wired into
+		// dynamicCache's periodic refresh (see TracerManager.Reconcile doc).
+		obs.Tracer.Reconcile(ctx, dynamicCache.OtelEnabled(dynSeed.OtelEnabled))
 	}
 
 	// Admin API key: same secrets.Secrets (env impl) pattern as the mock
-	// webhook secret in bootstrap.RegisterVerifiers -- a documented,
-	// local-dev-only fallback when unset, per the plan's "RBAC sederhana"
-	// framing (one shared credential, not a full permission system).
+	// webhook secret in bootstrap.RegisterVerifiers. Deliberately NO
+	// hardcoded fallback when unset -- adminAuth (rest/admin.go) already
+	// rejects every request when its configured key is "", so leaving
+	// adminAPIKey empty fails closed rather than falling open to a fixed,
+	// source-visible literal (which would be a real auth bypass, not a
+	// convenience default).
 	secretsStore := env.New("")
 	adminAPIKey := secretsStore.GetSecret("admin_api_key")
 	if adminAPIKey == "" {
-		adminAPIKey = "dev-only-admin-key"
+		logger.Warn("admin_api_key not configured; /admin/config will reject every request until it is set")
 	}
 
 	// 6. Transport: single fiber app with health + payment + webhook +

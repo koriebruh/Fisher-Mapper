@@ -14,10 +14,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -131,6 +133,71 @@ func ProviderEnabledKey(providerName string) string {
 	return "provider." + providerName + ".enabled"
 }
 
+// app_config keys for the queue-name and OTel-toggle dynamic config values.
+// Mirrored by the seed INSERTs in 00006_dynamic_config_seeds.sql and by
+// DynamicSeed's defaults below -- three places, one literal each, kept in
+// sync by convention (same pattern already used for provider.mock.enabled
+// in 00004_app_config.sql).
+const (
+	QueueDefaultNameKey    = "queue.default_name"
+	ObservabilityOtelKey   = "observability.otel_enabled"
+	DefaultQueueName       = "default"
+	DefaultObservabilityOn = true
+)
+
+// DynamicSeed holds the config.toml [queue]/[observability] values that seed
+// the two app_config keys above. Unlike every other dynamic-config value,
+// these two seeds are ALSO read directly from config.toml at process boot
+// (LoadDynamicSeed), not only baked into the migration -- because the OTel
+// tracer must be created before Postgres connects (see
+// bootstrap.RegisterObservability), so there is no Cache to read from yet at
+// that point in startup. This is a deliberate, narrow exception to "dynamic
+// config never comes from config.toml at runtime": once Postgres is
+// reachable, main.go reconciles the tracer against the live app_config row,
+// which then governs (including changes via the admin endpoint) without
+// requiring a restart. The queue name has no such pre-DB reader -- it is
+// only ever consumed via Cache, same as ProviderEnabled.
+type DynamicSeed struct {
+	QueueDefaultName string
+	OtelEnabled      bool
+}
+
+// LoadDynamicSeed reads the [queue]/[observability] sections of config.toml,
+// falling back to DefaultQueueName/DefaultObservabilityOn for anything
+// missing or if path does not exist -- same missing-file tolerance as
+// bootstrap Load.
+func LoadDynamicSeed(path string) (DynamicSeed, error) {
+	seed := DynamicSeed{QueueDefaultName: DefaultQueueName, OtelEnabled: DefaultObservabilityOn}
+	if path == "" {
+		return seed, nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return seed, nil
+		}
+		return seed, fmt.Errorf("config: dynamic seed: stat %s: %w", path, err)
+	}
+
+	var fc struct {
+		Queue struct {
+			DefaultName *string `toml:"default_name"`
+		} `toml:"queue"`
+		Observability struct {
+			OtelEnabled *bool `toml:"otel_enabled"`
+		} `toml:"observability"`
+	}
+	if _, err := toml.DecodeFile(path, &fc); err != nil {
+		return seed, fmt.Errorf("config: dynamic seed: decode %s: %w", path, err)
+	}
+	if fc.Queue.DefaultName != nil && *fc.Queue.DefaultName != "" {
+		seed.QueueDefaultName = *fc.Queue.DefaultName
+	}
+	if fc.Observability.OtelEnabled != nil {
+		seed.OtelEnabled = *fc.Observability.OtelEnabled
+	}
+	return seed, nil
+}
+
 // configSource is the subset of DynamicStore that Cache depends on,
 // declared as an interface so the fallback-on-refresh-failure behavior
 // (Cache's whole reason for existing) can be unit tested against a fake
@@ -236,6 +303,17 @@ func (c *Cache) Get(key string) (string, bool) {
 	return v, ok
 }
 
+// GetString returns the value for key, or defaultValue if key is absent or
+// blank (an operator clearing a row's value should fall back to the seed,
+// not hand callers an empty string -- e.g. an empty asynq queue name).
+func (c *Cache) GetString(key, defaultValue string) string {
+	v, ok := c.Get(key)
+	if !ok || v == "" {
+		return defaultValue
+	}
+	return v
+}
+
 // GetBool returns the boolean value for key ("true"/"1"/"t" parse as true
 // via strconv.ParseBool), or defaultValue if key is absent or unparsable.
 func (c *Cache) GetBool(key string, defaultValue bool) bool {
@@ -258,4 +336,17 @@ func (c *Cache) GetBool(key string, defaultValue bool) bool {
 // before Fase 4 existed.
 func (c *Cache) ProviderEnabled(providerName string) bool {
 	return c.GetBool(ProviderEnabledKey(providerName), true)
+}
+
+// QueueName returns the configured asynq queue name, falling back to
+// seedDefault (from DynamicSeed, itself from config.toml) if app_config has
+// no row for QueueDefaultNameKey yet.
+func (c *Cache) QueueName(seedDefault string) string {
+	return c.GetString(QueueDefaultNameKey, seedDefault)
+}
+
+// OtelEnabled returns the live app_config value for the OTel toggle,
+// falling back to seedDefault if no row exists yet.
+func (c *Cache) OtelEnabled(seedDefault bool) bool {
+	return c.GetBool(ObservabilityOtelKey, seedDefault)
 }

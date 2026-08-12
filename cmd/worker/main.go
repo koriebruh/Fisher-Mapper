@@ -84,15 +84,22 @@ func run_() error {
 		return fmt.Errorf("load bootstrap config: %w", err)
 	}
 
-	obs, err := bootstrap.RegisterObservability(ctx, cfg, serviceName)
+	// dynSeed's otel_enabled is read straight from config.toml because the
+	// tracer below is created before Postgres connects -- see
+	// config.DynamicSeed's doc. QueueDefaultName is also loaded here so it's
+	// available as the fallback default even if the app_config row is
+	// missing after Load below.
+	dynSeed, err := config.LoadDynamicSeed(configPath())
 	if err != nil {
-		return fmt.Errorf("register observability: %w", err)
+		return fmt.Errorf("load dynamic config seed: %w", err)
 	}
+
+	obs := bootstrap.RegisterObservability(ctx, cfg, serviceName, dynSeed.OtelEnabled)
 	logger := obs.Logger
 	defer func() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
-		if err := obs.ShutdownTracer(shutdownCtx); err != nil {
+		if err := obs.Tracer.Shutdown(shutdownCtx); err != nil {
 			logger.Error("shutdown tracer provider", "error", err)
 		}
 	}()
@@ -116,6 +123,23 @@ func run_() error {
 		return fmt.Errorf("load dynamic config: %w", err)
 	}
 	logger.Info("loaded dynamic config")
+
+	// Reconcile the tracer (built pre-Postgres from config.toml's seed
+	// value, see dynSeed above) against the live app_config row, now that
+	// one can exist. One-shot -- see TracerManager.Reconcile's doc for why
+	// this is not wired into dynamicCache's periodic refresh.
+	obs.Tracer.Reconcile(ctx, dynamicCache.OtelEnabled(dynSeed.OtelEnabled))
+
+	// Queue name: read ONCE here rather than via a live getter, and used for
+	// both the asynq server's Queues (below) and the relay's producer side.
+	// asynq.Server's queue set is fixed at construction -- if the relay
+	// picked up a renamed queue live while the server kept consuming the
+	// old one, tasks would enqueue into a queue nothing is listening on and
+	// stall silently. Renaming the queue therefore requires a worker
+	// restart; this snapshot is what makes producer and consumer agree for
+	// this process's entire lifetime.
+	queueName := dynamicCache.QueueName(dynSeed.QueueDefaultName)
+	logger.Info("queue name resolved", "queue", queueName)
 
 	// Domain wiring -- identical construction to cmd/server, plus the
 	// worker-only pieces (webhook staging join, circuit breaker, bulkhead,
@@ -178,7 +202,8 @@ func run_() error {
 	// paymentService.ProcessCharge/ProcessRefund above).
 	outboxStore := outbox.NewStore(pool)
 	relay := outbox.NewRelay(outboxStore, switchingClient, relayBaseInterval, relayMaxInterval, relayBatchSize).
-		WithProviderEnabledCheck(dynamicCache.ProviderEnabled)
+		WithProviderEnabledCheck(dynamicCache.ProviderEnabled).
+		WithQueueName(func() string { return queueName })
 
 	// asynq task server: the real (Redis-backed) consumption side. The
 	// memory fallback's consumption side is memoryClient itself (it
@@ -203,7 +228,12 @@ func run_() error {
 	asynqServer := asynq.NewServer(
 		asynq.RedisClientOpt{Addr: cfg.Redis.Addr},
 		asynq.Config{
-			Concurrency:  asynqConcurrency,
+			Concurrency: asynqConcurrency,
+			// Queues must list every queue name the relay might dispatch
+			// into (here, just the one queueName snapshot above) -- asynq
+			// defaults to consuming only "default" otherwise, which would
+			// silently strand every task if queueName is anything else.
+			Queues:       map[string]int{queueName: 1},
 			ErrorHandler: terminalFailures.AsynqErrorHandler(),
 		},
 	)

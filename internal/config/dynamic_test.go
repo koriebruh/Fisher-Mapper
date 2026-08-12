@@ -184,3 +184,67 @@ func TestCache_GetBool_InvalidValueUsesDefault(t *testing.T) {
 		t.Error("GetBool with an unparsable stored value did not fall back to the provided default")
 	}
 }
+
+func TestCache_QueueName_UsesSeedDefaultWhenRowAbsent(t *testing.T) {
+	src := &fakeConfigSource{values: map[string]string{}}
+	c := NewCache(src, time.Hour)
+	if err := c.Load(context.Background()); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := c.QueueName("my-seed-default"); got != "my-seed-default" {
+		t.Errorf("QueueName with no app_config row = %q, want seed default %q", got, "my-seed-default")
+	}
+}
+
+func TestCache_QueueName_RowOverridesSeedDefault(t *testing.T) {
+	src := &fakeConfigSource{values: map[string]string{QueueDefaultNameKey: "payments"}}
+	c := NewCache(src, time.Hour)
+	if err := c.Load(context.Background()); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := c.QueueName("default"); got != "payments" {
+		t.Errorf("QueueName = %q, want app_config row value %q to win over seed default", got, "payments")
+	}
+}
+
+func TestCache_OtelEnabled_RowOverridesSeedDefault(t *testing.T) {
+	src := &fakeConfigSource{values: map[string]string{ObservabilityOtelKey: "false"}}
+	c := NewCache(src, time.Hour)
+	if err := c.Load(context.Background()); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.OtelEnabled(true) {
+		t.Error("OtelEnabled = true, want the app_config row (false) to override the seed default (true)")
+	}
+}
+
+func TestLoadDynamicSeed_MissingFileUsesHardcodedDefaults(t *testing.T) {
+	seed, err := LoadDynamicSeed("/nonexistent/config.toml")
+	if err != nil {
+		t.Fatalf("LoadDynamicSeed: %v", err)
+	}
+	if seed.QueueDefaultName != DefaultQueueName || seed.OtelEnabled != DefaultObservabilityOn {
+		t.Errorf("LoadDynamicSeed on missing file = %+v, want hardcoded defaults", seed)
+	}
+}
+
+func TestLoadDynamicSeed_ReadsQueueAndObservabilitySections(t *testing.T) {
+	path := writeTempTOML(t, `
+[queue]
+default_name = "payments"
+
+[observability]
+otel_enabled = false
+`)
+
+	seed, err := LoadDynamicSeed(path)
+	if err != nil {
+		t.Fatalf("LoadDynamicSeed: %v", err)
+	}
+	if seed.QueueDefaultName != "payments" {
+		t.Errorf("QueueDefaultName = %q, want %q", seed.QueueDefaultName, "payments")
+	}
+	if seed.OtelEnabled {
+		t.Error("OtelEnabled = true, want false per file")
+	}
+}

@@ -46,6 +46,14 @@ type EnqueueOptions struct {
 
 	// MaxRetry overrides the default retry count for this task if non-nil.
 	MaxRetry *int
+
+	// QueueName, if non-empty, routes the task to that asynq queue instead
+	// of asynq's implicit "default" queue. Ignored by MemoryClient (a
+	// single in-process fallback has no queue concept); AsynqClient maps it
+	// to asynq.Queue(name). The asynq server consuming this queue must have
+	// been started with a matching entry in asynq.Config.Queues, or the
+	// task will sit unconsumed -- see cmd/worker/main.go.
+	QueueName string
 }
 
 // Client dispatches tasks to be processed asynchronously, either durably
@@ -88,6 +96,9 @@ func (a *AsynqClient) Enqueue(ctx context.Context, taskType string, payload []by
 	}
 	if opts.MaxRetry != nil {
 		taskOpts = append(taskOpts, asynq.MaxRetry(*opts.MaxRetry))
+	}
+	if opts.QueueName != "" {
+		taskOpts = append(taskOpts, asynq.Queue(opts.QueueName))
 	}
 
 	task := asynq.NewTask(taskType, payload, taskOpts...)
