@@ -10,7 +10,6 @@ import (
 	"Fisher-Mapper/internal/domain/payment"
 )
 
-// createRefundRequest is the wire shape for POST /payments/:id/refunds.
 type createRefundRequest struct {
 	Currency string `json:"currency"`
 	Amount   int64  `json:"amount"`
@@ -67,7 +66,6 @@ func handleCreateRefund(deps PaymentDeps) fiber.Handler {
 	}
 }
 
-// refundView is the wire shape for GET /payments/refunds/:id.
 type refundView struct {
 	RefundID          uuid.UUID `json:"refund_id"`
 	PaymentID         uuid.UUID `json:"payment_id"`

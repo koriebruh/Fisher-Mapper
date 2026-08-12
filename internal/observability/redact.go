@@ -81,8 +81,6 @@ type RedactingHandler struct {
 	next slog.Handler
 }
 
-// NewRedactingHandler wraps next with redaction. next is typically a
-// slog.JSONHandler or slog.TextHandler writing to the process's log sink.
 func NewRedactingHandler(next slog.Handler) *RedactingHandler {
 	return &RedactingHandler{next: next}
 }

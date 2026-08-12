@@ -17,7 +17,6 @@ import (
 	"Fisher-Mapper/internal/provider"
 )
 
-// Config controls the mock's simulated behavior.
 type Config struct {
 	// Name is the registry key this instance answers to.
 	Name string
@@ -57,7 +56,6 @@ type chargeRecord struct {
 	currency string
 }
 
-// Mock is a provider.Provider implementation backed by in-memory state.
 // Safe for concurrent use.
 type Mock struct {
 	cfg Config
