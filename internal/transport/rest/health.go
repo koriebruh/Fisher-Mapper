@@ -40,7 +40,6 @@ type Deps struct {
 	AdminAPIKey        string
 }
 
-// NewApp builds the fiber app and registers all routes.
 func NewApp(deps Deps) *fiber.App {
 	app := fiber.New(fiber.Config{
 		DisableStartupMessage: true,
@@ -77,8 +76,6 @@ func NewApp(deps Deps) *fiber.App {
 	return app
 }
 
-// RegisterHealthRoutes registers /healthz and /readyz.
-//
 // /healthz reports process liveness only (no dependency checks) — it
 // answers "is the process alive and able to handle a request", the
 // standard k8s liveness-probe contract.

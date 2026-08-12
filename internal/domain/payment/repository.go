@@ -47,7 +47,6 @@ type Repository interface {
 	// p.ID/CreatedAt/UpdatedAt/LastEventAt from the DB defaults.
 	Create(ctx context.Context, p *Payment) error
 
-	// Get fetches a payment by id.
 	Get(ctx context.Context, id uuid.UUID) (*Payment, error)
 
 	// FindByProviderRef looks up a payment by (provider, providerRef),
@@ -103,7 +102,6 @@ type PGRepository struct {
 	pool *pgxpool.Pool
 }
 
-// NewPGRepository builds a PGRepository over an existing pool.
 func NewPGRepository(pool *pgxpool.Pool) *PGRepository {
 	return &PGRepository{pool: pool}
 }

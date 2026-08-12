@@ -60,7 +60,6 @@ type HMACSigner struct {
 	TimestampHeader string
 }
 
-// NewHMACSigner builds an HMACSigner with sensible default header names.
 func NewHMACSigner(secret string) HMACSigner {
 	return HMACSigner{
 		Secret:          secret,

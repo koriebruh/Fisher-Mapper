@@ -51,7 +51,6 @@ const (
 	ScopeRefund = "refund"
 )
 
-// Record is a stored idempotency row.
 type Record struct {
 	TenantID           string
 	Scope              string
@@ -62,7 +61,6 @@ type Record struct {
 	ResponseBody       []byte
 }
 
-// ReserveResult is what Reserve returns.
 type ReserveResult struct {
 	State  State
 	Record *Record
@@ -92,7 +90,6 @@ type PGStore struct {
 	pool *pgxpool.Pool
 }
 
-// NewPGStore builds a PGStore over an existing pool.
 func NewPGStore(pool *pgxpool.Pool) *PGStore {
 	return &PGStore{pool: pool}
 }

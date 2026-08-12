@@ -19,7 +19,6 @@ type Registry struct {
 	providers map[string]Provider
 }
 
-// NewRegistry builds an empty registry.
 func NewRegistry() *Registry {
 	return &Registry{providers: make(map[string]Provider)}
 }
@@ -37,7 +36,6 @@ func (r *Registry) Register(name string, p Provider) {
 	r.providers[name] = p
 }
 
-// Get looks up a provider by name.
 func (r *Registry) Get(name string) (Provider, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

@@ -46,7 +46,8 @@ type Breaker struct {
 	openedAt time.Time
 }
 
-// New builds a Breaker. failureThreshold must be >= 1.
+// New clamps failureThreshold up to 1 if given less (a breaker with zero
+// threshold would never admit anything, which is never useful).
 func New(failureThreshold int, cooldown time.Duration) *Breaker {
 	if failureThreshold < 1 {
 		failureThreshold = 1

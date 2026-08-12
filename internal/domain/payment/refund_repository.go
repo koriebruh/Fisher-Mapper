@@ -181,7 +181,6 @@ func (r *PGRepository) ApplyRefundTransition(ctx context.Context, params RefundT
 	return nil
 }
 
-// GetRefund fetches a refund by id.
 func (r *PGRepository) GetRefund(ctx context.Context, id uuid.UUID) (*Refund, error) {
 	const selectSQL = `
 		SELECT id, payment_id, tenant_id, livemode, currency, amount, provider,

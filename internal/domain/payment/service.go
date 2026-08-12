@@ -96,7 +96,6 @@ type Service struct {
 	providerEnabled func(providerName string) bool
 }
 
-// NewService builds a Service with production defaults.
 func NewService(repo Repository, idem idempotency.Store, providers providerRegistry) *Service {
 	return &Service{
 		repo:                   repo,

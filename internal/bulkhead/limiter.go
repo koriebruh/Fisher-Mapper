@@ -40,7 +40,6 @@ func (l *Limiter) semFor(key string) chan struct{} {
 	return s
 }
 
-// Acquire blocks until a slot for key is free, or ctx is done first.
 func (l *Limiter) Acquire(ctx context.Context, key string) error {
 	sem := l.semFor(key)
 	select {
@@ -51,8 +50,7 @@ func (l *Limiter) Acquire(ctx context.Context, key string) error {
 	}
 }
 
-// Release frees one slot for key. Must be called exactly once per
-// successful Acquire, typically via defer.
+// Release must be called exactly once per successful Acquire, typically via defer.
 func (l *Limiter) Release(key string) {
 	sem := l.semFor(key)
 	select {

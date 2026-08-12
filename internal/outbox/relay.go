@@ -90,7 +90,6 @@ func (r *Relay) WithQueueName(fn func() string) *Relay {
 	return r
 }
 
-// Run polls until ctx is done.
 func (r *Relay) Run(ctx context.Context) error {
 	interval := r.baseInterval
 	timer := time.NewTimer(interval)

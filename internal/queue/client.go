@@ -63,15 +63,13 @@ type Client interface {
 	Close() error
 }
 
-// NewClient creates a raw asynq client pointed at the given Redis address.
-// Kept as-is from Fase 1 for the /readyz health check's use
+// NewClient is kept as-is from Fase 1 for the /readyz health check's use
 // (checkRedis in transport/rest/health.go) -- unrelated to the Client
 // interface above, which AsynqClient wraps separately.
 func NewClient(addr string) *asynq.Client {
 	return asynq.NewClient(asynq.RedisClientOpt{Addr: addr})
 }
 
-// Ping verifies connectivity to Redis through the asynq client.
 func Ping(client *asynq.Client) error {
 	if err := client.Ping(); err != nil {
 		return fmt.Errorf("queue: ping redis: %w", err)
@@ -84,7 +82,6 @@ type AsynqClient struct {
 	c *asynq.Client
 }
 
-// NewAsynqClient builds an AsynqClient over a fresh asynq client connection.
 func NewAsynqClient(addr string) *AsynqClient {
 	return &AsynqClient{c: NewClient(addr)}
 }

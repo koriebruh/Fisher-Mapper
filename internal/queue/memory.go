@@ -63,7 +63,6 @@ func NewMemoryClient(onError ErrorRecorder) *MemoryClient {
 	return &MemoryClient{handlers: make(map[string]Handler), onError: onError, ctx: ctx, cancel: cancel}
 }
 
-// RegisterHandler wires h to process every task of the given type.
 func (m *MemoryClient) RegisterHandler(taskType string, h Handler) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

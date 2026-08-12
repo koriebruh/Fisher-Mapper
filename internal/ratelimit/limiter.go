@@ -12,7 +12,6 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-// Limiter is a token-bucket rate limiter with independent buckets per key.
 type Limiter struct {
 	ratePerSecond float64
 	burst         float64

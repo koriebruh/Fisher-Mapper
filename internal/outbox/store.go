@@ -59,7 +59,6 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
-// NewStore builds a Store over an existing pool.
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }

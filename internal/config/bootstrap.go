@@ -63,9 +63,8 @@ type fileConfig struct {
 	} `toml:"log"`
 }
 
-// defaultBootstrap returns the hardcoded defaults. These must be enough for
-// the server to start against a local docker-compose stack with zero
-// external configuration.
+// defaultBootstrap must be enough on its own for the server to start against
+// a local docker-compose stack with zero external configuration.
 func defaultBootstrap() Bootstrap {
 	return Bootstrap{
 		Postgres: Postgres{

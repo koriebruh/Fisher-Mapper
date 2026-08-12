@@ -25,7 +25,6 @@ type TerminalFailureRecorder struct {
 	pool *pgxpool.Pool
 }
 
-// NewTerminalFailureRecorder builds a recorder over an existing pool.
 func NewTerminalFailureRecorder(pool *pgxpool.Pool) *TerminalFailureRecorder {
 	return &TerminalFailureRecorder{pool: pool}
 }

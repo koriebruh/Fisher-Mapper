@@ -31,13 +31,11 @@ type DynamicStore struct {
 	pool *pgxpool.Pool
 }
 
-// NewDynamicStore builds a DynamicStore over an existing pool.
 func NewDynamicStore(pool *pgxpool.Pool) *DynamicStore {
 	return &DynamicStore{pool: pool}
 }
 
-// GetAll returns every key/value pair currently in app_config -- what
-// Cache.refresh calls to repopulate its snapshot.
+// GetAll is what Cache.refresh calls to repopulate its snapshot.
 func (s *DynamicStore) GetAll(ctx context.Context) (map[string]string, error) {
 	const selectSQL = `SELECT key, value FROM app_config`
 	rows, err := s.pool.Query(ctx, selectSQL)
@@ -220,9 +218,9 @@ type Cache struct {
 	values map[string]string
 }
 
-// NewCache builds a Cache. It starts empty -- call Load once, synchronously,
-// before serving any traffic that depends on it (see doc on Load), then
-// hand Run to an oklog/run actor for ongoing background refresh.
+// NewCache starts the cache empty -- call Load once, synchronously, before
+// serving any traffic that depends on it (see Load's doc), then hand Run to
+// an oklog/run actor for ongoing background refresh.
 func NewCache(store configSource, refreshInterval time.Duration) *Cache {
 	if refreshInterval <= 0 {
 		refreshInterval = 30 * time.Second
@@ -295,7 +293,6 @@ func (c *Cache) refresh(ctx context.Context) {
 	c.mu.Unlock()
 }
 
-// Get returns the raw string value for key, and whether it was present.
 func (c *Cache) Get(key string) (string, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

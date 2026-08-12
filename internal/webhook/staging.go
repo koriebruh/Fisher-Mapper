@@ -33,7 +33,6 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
-// NewStore builds a Store over an existing pool.
 func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
@@ -128,7 +127,6 @@ func (s *Store) FindUnprocessedProviderRefs(ctx context.Context) ([]ProviderRefP
 	return out, nil
 }
 
-// MarkProcessed records that a staged event has been joined to paymentID.
 func (s *Store) MarkProcessed(ctx context.Context, id, paymentID uuid.UUID) error {
 	const updateSQL = `UPDATE incoming_webhook_events SET processed_at = now(), payment_id = $1 WHERE id = $2`
 	if _, err := s.pool.Exec(ctx, updateSQL, paymentID, id); err != nil {

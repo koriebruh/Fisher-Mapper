@@ -103,7 +103,6 @@ func (e *Error) Unwrap() error {
 	return e.Cause
 }
 
-// New builds an *Error with no wrapped cause.
 func New(code Code, message string) *Error {
 	return &Error{Code: code, Message: message}
 }

@@ -13,12 +13,10 @@ type Secrets struct {
 	Prefix string
 }
 
-// New builds an env-backed secrets.Secrets with the given prefix.
 func New(prefix string) Secrets {
 	return Secrets{Prefix: prefix}
 }
 
-// GetSecret returns os.Getenv(Prefix + strings.ToUpper(key)), or "" if unset.
 func (s Secrets) GetSecret(key string) string {
 	name := s.Prefix + strings.ToUpper(key)
 	return os.Getenv(name)

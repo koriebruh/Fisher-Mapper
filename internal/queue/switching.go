@@ -17,7 +17,6 @@ type SwitchingClient struct {
 	health       *RedisHealthChecker
 }
 
-// NewSwitchingClient builds a SwitchingClient over both backends.
 func NewSwitchingClient(asynqClient *AsynqClient, memoryClient *MemoryClient, health *RedisHealthChecker) *SwitchingClient {
 	return &SwitchingClient{asynqClient: asynqClient, memoryClient: memoryClient, health: health}
 }
