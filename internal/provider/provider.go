@@ -121,7 +121,7 @@ type RefundResponse struct {
 }
 
 // ParseWebhookRequest is the raw inbound webhook payload the provider sent.
-// Signature/timestamp verification is the Verifier's job (internal/auth),
+// Signature/timestamp verification is the Verifier's job (internal/provider/auth),
 // not this method's — ParseWebhook only knows how to decode the provider's
 // wire format into a WebhookEvent.
 type ParseWebhookRequest struct {

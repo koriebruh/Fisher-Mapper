@@ -6,10 +6,10 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 
-	"Fisher-Mapper/internal/auth"
 	"Fisher-Mapper/internal/domain/apperror"
 	"Fisher-Mapper/internal/domain/payment"
 	"Fisher-Mapper/internal/provider"
+	"Fisher-Mapper/internal/provider/auth"
 	"Fisher-Mapper/internal/webhook"
 )
 

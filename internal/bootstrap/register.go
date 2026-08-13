@@ -14,10 +14,10 @@ import (
 	"log/slog"
 	"time"
 
-	"Fisher-Mapper/internal/auth"
 	"Fisher-Mapper/internal/config"
 	"Fisher-Mapper/internal/observability"
 	"Fisher-Mapper/internal/provider"
+	"Fisher-Mapper/internal/provider/auth"
 	"Fisher-Mapper/internal/provider/mock"
 	"Fisher-Mapper/internal/secrets/env"
 )
