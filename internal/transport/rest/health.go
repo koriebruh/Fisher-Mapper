@@ -10,11 +10,11 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"Fisher-Mapper/internal/config"
 	"Fisher-Mapper/internal/domain/payment"
+	"Fisher-Mapper/internal/platform/config"
+	"Fisher-Mapper/internal/platform/queue"
 	"Fisher-Mapper/internal/provider"
 	"Fisher-Mapper/internal/provider/auth"
-	"Fisher-Mapper/internal/queue"
 	"Fisher-Mapper/internal/ratelimit"
 	"Fisher-Mapper/internal/webhook"
 )

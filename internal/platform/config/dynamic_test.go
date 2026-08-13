@@ -113,7 +113,7 @@ func TestCache_Refresh_FallsBackToLastKnownGoodOnFailure(t *testing.T) {
 
 // TestCache_Run_ContinuesTickingAfterARefreshFailure exercises the SAME
 // fallback guarantee through the actual background-refresh actor (Run) that
-// internal/lifecycle.RunnerActor wraps for oklog/run.Group in cmd/worker --
+// internal/platform/lifecycle.RunnerActor wraps for oklog/run.Group in cmd/worker --
 // not just the one-shot Refresh helper -- proving a failed tick does not
 // stop the loop (no panic, no early return) and a later tick still
 // recovers.

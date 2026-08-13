@@ -14,12 +14,12 @@ import (
 	"log/slog"
 	"os"
 
-	"Fisher-Mapper/internal/config"
-	"Fisher-Mapper/internal/db"
-	"Fisher-Mapper/internal/observability"
+	"Fisher-Mapper/internal/platform/config"
+	"Fisher-Mapper/internal/platform/db"
+	"Fisher-Mapper/internal/platform/observability"
 )
 
-const migrationsDir = "internal/db/migrations"
+const migrationsDir = "internal/platform/db/migrations"
 
 func main() {
 	down := flag.Bool("down", false, "roll back the single most recent migration instead of applying pending ones")

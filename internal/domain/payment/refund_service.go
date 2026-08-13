@@ -13,8 +13,8 @@ import (
 	"Fisher-Mapper/internal/domain/apperror"
 	"Fisher-Mapper/internal/idempotency"
 	"Fisher-Mapper/internal/outbox"
+	"Fisher-Mapper/internal/platform/queue"
 	"Fisher-Mapper/internal/provider"
-	"Fisher-Mapper/internal/queue"
 )
 
 // CreateRefundInput is the domain-level input for Service.CreateRefund.

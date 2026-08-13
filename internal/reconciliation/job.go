@@ -43,7 +43,7 @@ func New(service *payment.Service, interval, threshold time.Duration) *Job {
 	return &Job{service: service, interval: interval, threshold: threshold}
 }
 
-// Run loops until ctx is done -- the actor internal/lifecycle.RunnerActor
+// Run loops until ctx is done -- the actor internal/platform/lifecycle.RunnerActor
 // wraps for oklog/run.Group.
 func (j *Job) Run(ctx context.Context) error {
 	ticker := time.NewTicker(j.interval)

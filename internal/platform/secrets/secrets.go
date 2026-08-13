@@ -7,7 +7,7 @@
 package secrets
 
 // Secrets resolves a named secret to its value. The env implementation
-// (internal/secrets/env) simply reads an environment variable; other
+// (internal/platform/secrets/env) simply reads an environment variable; other
 // implementations may hit a network-backed secrets manager instead.
 //
 // GetSecret returns "" if the key is not found — callers that require a

@@ -14,12 +14,12 @@ import (
 	"log/slog"
 	"time"
 
-	"Fisher-Mapper/internal/config"
-	"Fisher-Mapper/internal/observability"
+	"Fisher-Mapper/internal/platform/config"
+	"Fisher-Mapper/internal/platform/observability"
+	"Fisher-Mapper/internal/platform/secrets/env"
 	"Fisher-Mapper/internal/provider"
 	"Fisher-Mapper/internal/provider/auth"
 	"Fisher-Mapper/internal/provider/mock"
-	"Fisher-Mapper/internal/secrets/env"
 )
 
 // Observability bundles what Register produces so main() can use the

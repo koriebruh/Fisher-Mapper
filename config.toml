@@ -18,9 +18,9 @@ port = 8080
 level = "info"
 
 # Everything below is NOT bootstrap config -- it seeds dynamic config rows in
-# Postgres app_config (see internal/db/migrations/00006_dynamic_config_seeds.sql,
+# Postgres app_config (see internal/platform/db/migrations/00006_dynamic_config_seeds.sql,
 # which mirrors these same literals) and, for otel_enabled only, is also read
-# directly by internal/config.LoadDynamicSeed at boot because the OTel
+# directly by internal/platform/config.LoadDynamicSeed at boot because the OTel
 # tracer must exist before Postgres connects. Once app_config has a row for
 # a key, that row governs -- editing this file after first migration/boot
 # has no runtime effect; change the row instead (PUT /admin/config/:key or

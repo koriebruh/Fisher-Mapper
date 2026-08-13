@@ -2,7 +2,7 @@
 
 -- app_config is the Fase 4 dynamic-config table (plan "Prinsip Arsitektur
 -- Dasar" item 2): loaded AFTER the bootstrap Postgres connection exists,
--- cached in memory by internal/config.Cache with periodic refresh. Values
+-- cached in memory by internal/platform/config.Cache with periodic refresh. Values
 -- are plain text (interpreted by the reader -- bool/int/string) rather than
 -- typed columns, since the whole point of this table is that new flags can
 -- be added without a migration.
@@ -23,7 +23,7 @@ VALUES ('provider.mock.enabled', 'true', 'migration_seed');
 -- app_config_audit is the Fase 4 "stub cheap" admin audit table (plan:
 -- "Admin config audit table (app_config_audit): siapa ubah apa kapan").
 -- Written in the SAME transaction as every app_config UPDATE/INSERT (see
--- internal/config.DynamicStore.SetWithAudit) so a config change without a
+-- internal/platform/config.DynamicStore.SetWithAudit) so a config change without a
 -- matching audit row is impossible by construction, not by convention.
 CREATE TABLE app_config_audit (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),

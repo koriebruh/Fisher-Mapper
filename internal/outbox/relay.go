@@ -8,7 +8,7 @@ import (
 	"math/rand/v2"
 	"time"
 
-	"Fisher-Mapper/internal/queue"
+	"Fisher-Mapper/internal/platform/queue"
 )
 
 // providerCarryingTaskTypes are the outbox task types whose payload has a
@@ -31,7 +31,7 @@ type providerCarrier struct {
 }
 
 // Relay periodically drains pending outbox rows to a queue.Client. It is
-// the actor internal/lifecycle.RunnerActor wraps for oklog/run.Group.
+// the actor internal/platform/lifecycle.RunnerActor wraps for oklog/run.Group.
 type Relay struct {
 	store        *Store
 	client       queue.Client

@@ -16,8 +16,8 @@ import (
 	"Fisher-Mapper/internal/domain/apperror"
 	"Fisher-Mapper/internal/idempotency"
 	"Fisher-Mapper/internal/outbox"
+	"Fisher-Mapper/internal/platform/queue"
 	"Fisher-Mapper/internal/provider"
-	"Fisher-Mapper/internal/queue"
 	"Fisher-Mapper/internal/webhook"
 )
 
@@ -88,7 +88,7 @@ type Service struct {
 	bulkheadLimiter *bulkhead.Limiter
 
 	// providerEnabled is the Fase 4 dynamic-config provider-enabled check,
-	// injected as a plain func so this package never imports internal/config
+	// injected as a plain func so this package never imports internal/platform/config
 	// (which owns the cache/refresh machinery) -- keeps the domain layer's
 	// dependency graph exactly as narrow as it was before Fase 4. nil means
 	// "always enabled" (backward compatible: cmd/server's HTTP-only Service

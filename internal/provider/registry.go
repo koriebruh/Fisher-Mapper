@@ -12,7 +12,7 @@ import (
 //
 // Per the plan's "Larangan blank import" rule, registration is done by
 // calling Register from an explicit bootstrap function (see
-// internal/bootstrap/register.go), executed in order from main() — never
+// internal/platform/bootstrap/register.go), executed in order from main() — never
 // via `import _ "package"` for an init() side effect.
 type Registry struct {
 	mu        sync.RWMutex

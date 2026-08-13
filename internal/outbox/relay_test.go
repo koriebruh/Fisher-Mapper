@@ -6,7 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"Fisher-Mapper/internal/queue"
+	"Fisher-Mapper/internal/platform/queue"
 )
 
 // fakeQueueClient records the EnqueueOptions it was called with, so tests

@@ -26,15 +26,15 @@ import (
 
 	"github.com/oklog/run"
 
-	"Fisher-Mapper/internal/bootstrap"
-	"Fisher-Mapper/internal/config"
-	"Fisher-Mapper/internal/db"
 	"Fisher-Mapper/internal/domain/payment"
 	"Fisher-Mapper/internal/idempotency"
-	"Fisher-Mapper/internal/lifecycle"
-	"Fisher-Mapper/internal/queue"
+	"Fisher-Mapper/internal/platform/bootstrap"
+	"Fisher-Mapper/internal/platform/config"
+	"Fisher-Mapper/internal/platform/db"
+	"Fisher-Mapper/internal/platform/lifecycle"
+	"Fisher-Mapper/internal/platform/queue"
+	"Fisher-Mapper/internal/platform/secrets/env"
 	"Fisher-Mapper/internal/ratelimit"
-	"Fisher-Mapper/internal/secrets/env"
 	"Fisher-Mapper/internal/transport/rest"
 	"Fisher-Mapper/internal/webhook"
 )

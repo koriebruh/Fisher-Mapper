@@ -248,7 +248,7 @@ func (c *Cache) Load(ctx context.Context) error {
 }
 
 // Run periodically refreshes the cache until ctx is done -- the actor
-// internal/lifecycle.RunnerActor wraps for oklog/run.Group, alongside the
+// internal/platform/lifecycle.RunnerActor wraps for oklog/run.Group, alongside the
 // outbox relay and asynq server. A refresh failure (e.g. Postgres
 // unreachable) is logged as a warning and the loop continues on its normal
 // interval, still serving whatever snapshot Load (or the last successful

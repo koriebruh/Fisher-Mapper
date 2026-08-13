@@ -25,16 +25,16 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/oklog/run"
 
-	"Fisher-Mapper/internal/bootstrap"
 	"Fisher-Mapper/internal/bulkhead"
 	"Fisher-Mapper/internal/circuitbreaker"
-	"Fisher-Mapper/internal/config"
-	"Fisher-Mapper/internal/db"
 	"Fisher-Mapper/internal/domain/payment"
 	"Fisher-Mapper/internal/idempotency"
-	"Fisher-Mapper/internal/lifecycle"
 	"Fisher-Mapper/internal/outbox"
-	"Fisher-Mapper/internal/queue"
+	"Fisher-Mapper/internal/platform/bootstrap"
+	"Fisher-Mapper/internal/platform/config"
+	"Fisher-Mapper/internal/platform/db"
+	"Fisher-Mapper/internal/platform/lifecycle"
+	"Fisher-Mapper/internal/platform/queue"
 	"Fisher-Mapper/internal/reconciliation"
 	"Fisher-Mapper/internal/webhook"
 )
@@ -121,7 +121,7 @@ func run_() error {
 	// and fails startup on error (there is no last-known-good snapshot at
 	// t=0, consistent with db.NewPool already hard-failing on its own
 	// Ping) -- every refresh AFTER this one falls back to the last-known-
-	// good snapshot instead (see internal/config.Cache.Run).
+	// good snapshot instead (see internal/platform/config.Cache.Run).
 	dynamicStore := config.NewDynamicStore(pool)
 	dynamicCache := config.NewCache(dynamicStore, dynamicConfigRefreshInterval)
 	if err := dynamicCache.Load(ctx); err != nil {
