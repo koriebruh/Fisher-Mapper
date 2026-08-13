@@ -25,8 +25,6 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/oklog/run"
 
-	"Fisher-Mapper/internal/bulkhead"
-	"Fisher-Mapper/internal/circuitbreaker"
 	"Fisher-Mapper/internal/domain/payment"
 	"Fisher-Mapper/internal/idempotency"
 	"Fisher-Mapper/internal/outbox"
@@ -36,6 +34,8 @@ import (
 	"Fisher-Mapper/internal/platform/lifecycle"
 	"Fisher-Mapper/internal/platform/queue"
 	"Fisher-Mapper/internal/reconciliation"
+	"Fisher-Mapper/internal/resilience/bulkhead"
+	"Fisher-Mapper/internal/resilience/circuitbreaker"
 	"Fisher-Mapper/internal/webhook"
 )
 

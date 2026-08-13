@@ -15,7 +15,7 @@ import (
 	"Fisher-Mapper/internal/platform/queue"
 	"Fisher-Mapper/internal/provider"
 	"Fisher-Mapper/internal/provider/auth"
-	"Fisher-Mapper/internal/ratelimit"
+	"Fisher-Mapper/internal/resilience/ratelimit"
 	"Fisher-Mapper/internal/webhook"
 )
 

@@ -11,13 +11,13 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"Fisher-Mapper/internal/bulkhead"
-	"Fisher-Mapper/internal/circuitbreaker"
 	"Fisher-Mapper/internal/domain/apperror"
 	"Fisher-Mapper/internal/idempotency"
 	"Fisher-Mapper/internal/outbox"
 	"Fisher-Mapper/internal/platform/queue"
 	"Fisher-Mapper/internal/provider"
+	"Fisher-Mapper/internal/resilience/bulkhead"
+	"Fisher-Mapper/internal/resilience/circuitbreaker"
 	"Fisher-Mapper/internal/webhook"
 )
 

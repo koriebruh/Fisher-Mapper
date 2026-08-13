@@ -11,11 +11,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"Fisher-Mapper/internal/bulkhead"
 	"Fisher-Mapper/internal/domain/apperror"
 	"Fisher-Mapper/internal/idempotency"
 	"Fisher-Mapper/internal/provider"
 	"Fisher-Mapper/internal/provider/mock"
+	"Fisher-Mapper/internal/resilience/bulkhead"
 )
 
 // These tests exercise the real Postgres-backed Repository + idempotency

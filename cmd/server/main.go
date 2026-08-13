@@ -34,7 +34,7 @@ import (
 	"Fisher-Mapper/internal/platform/lifecycle"
 	"Fisher-Mapper/internal/platform/queue"
 	"Fisher-Mapper/internal/platform/secrets/env"
-	"Fisher-Mapper/internal/ratelimit"
+	"Fisher-Mapper/internal/resilience/ratelimit"
 	"Fisher-Mapper/internal/transport/rest"
 	"Fisher-Mapper/internal/webhook"
 )
