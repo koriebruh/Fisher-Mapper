@@ -1,12 +1,15 @@
 // Command server bootstraps config, a Postgres pool, a Redis-backed asynq
 // client (used only for the /readyz health check -- see cmd/worker for the
 // process that actually dispatches/consumes tasks), the PJP provider
-// registry, the payment domain service, and a single fiber HTTP server
-// exposing /healthz, /readyz, POST /payments, GET /payments/{id}, and (Fase
-// 3) POST /webhooks/{provider} — wired as oklog/run actors with a signal
-// handler so shutdown is deterministic. This process never calls a
-// provider directly: create-payment only writes to Postgres (payment row +
-// outbox row, one transaction).
+// registry, the payment domain service, a fiber HTTP server exposing
+// /healthz, /readyz, POST /payments, GET /payments/{id}, POST
+// /webhooks/{provider} (Fase 3), and (Fase 6) a second gRPC listener
+// exposing the same payment operations over internal/transport/grpc's
+// PaymentServiceServer -- wired as oklog/run actors with a signal handler
+// so shutdown is deterministic across both transports. This process never
+// calls a provider directly: create-payment only writes to Postgres
+// (payment row + outbox row, one transaction), regardless of which
+// transport received the request.
 //
 // Startup order (per plan "Prinsip Arsitektur Dasar"):
 //
@@ -20,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"syscall"
 	"time"
@@ -28,6 +32,9 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/adaptor"
 	"github.com/oklog/run"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
 
 	"Fisher-Mapper/internal/domain/payment"
 	"Fisher-Mapper/internal/messaging/idempotency"
@@ -40,8 +47,15 @@ import (
 	"Fisher-Mapper/internal/platform/queue"
 	"Fisher-Mapper/internal/platform/secrets/env"
 	"Fisher-Mapper/internal/resilience/ratelimit"
+	grpctransport "Fisher-Mapper/internal/transport/grpc"
+	paymentv1 "Fisher-Mapper/internal/transport/grpc/pb/payment/v1"
 	"Fisher-Mapper/internal/transport/rest"
 )
+
+// grpcShutdownTimeout matches the fiber actor's own shutdown timeout below
+// (lifecycle.FiberActor's 5*time.Second) -- both transports get the same
+// grace period to finish in-flight requests on SIGINT/SIGTERM.
+const grpcShutdownTimeout = 5 * time.Second
 
 const serviceName = "fisher-mapper"
 
@@ -224,12 +238,44 @@ func run_() error {
 
 	addr := fmt.Sprintf(":%d", cfg.HTTP.Port)
 
+	// 7. gRPC transport (Fase 6): same paymentService instance as the fiber
+	// app above -- "satu service layer, dua transport tipis". The listener
+	// is bound here, before g.Run(), so a bad port fails startup loudly
+	// instead of only surfacing once the run.Group actor's execute() runs.
+	grpcAddr := fmt.Sprintf(":%d", cfg.GRPC.Port)
+	grpcListener, err := net.Listen("tcp", grpcAddr)
+	if err != nil {
+		return fmt.Errorf("listen grpc %s: %w", grpcAddr, err)
+	}
+
+	grpcServer := grpc.NewServer(
+		// otelgrpc resolves the global TracerProvider (installed by
+		// bootstrap.RegisterObservability above) at Handler-construction
+		// time here, exactly like otelfiber.Middleware does for the fiber
+		// app -- every RPC gets a span on the same trace pipeline REST uses.
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+		// Same *ratelimit.Limiter instance the fiber payment group's
+		// middleware uses (see rest.NewApp) -- gRPC is not a way around
+		// REST's rate limiting.
+		grpc.UnaryInterceptor(grpctransport.RateLimitInterceptor(limiter)),
+	)
+	paymentv1.RegisterPaymentServiceServer(grpcServer, grpctransport.NewServer(paymentService))
+	// grpcurl (used for manual/validation testing) needs either the .proto
+	// files or server reflection to resolve the service -- reflection is the
+	// zero-config option for a template. In a real deployment this is worth
+	// gating behind an internal-only listener/flag; that's a one-line change
+	// (drop this call) left for the operator, not built here.
+	reflection.Register(grpcServer)
+
 	var g run.Group
 
 	g.Add(run.SignalHandler(ctx, syscall.SIGINT, syscall.SIGTERM))
 
 	fiberExecute, fiberInterrupt := lifecycle.FiberActor(app, addr, 5*time.Second)
 	g.Add(fiberExecute, fiberInterrupt)
+
+	grpcExecute, grpcInterrupt := lifecycle.GRPCServerActor(grpcServer, grpcListener, grpcShutdownTimeout)
+	g.Add(grpcExecute, grpcInterrupt)
 
 	// Fase 4 dynamic config watcher: without this actor, serverDynamicConfigRefreshInterval
 	// drives no ticker at all -- this process's Cache would only ever update
@@ -252,7 +298,7 @@ func run_() error {
 		g.Add(pollerExecute, pollerInterrupt)
 	}
 
-	logger.Info("starting server", "addr", addr)
+	logger.Info("starting server", "http_addr", addr, "grpc_addr", grpcAddr)
 	if err := g.Run(); err != nil && !errors.Is(err, run.ErrSignal) {
 		return err
 	}

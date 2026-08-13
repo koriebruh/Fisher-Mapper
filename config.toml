@@ -1,5 +1,6 @@
 # Bootstrap config — loaded after hardcoded defaults, before env var
-# overrides (APP_POSTGRES_DSN, APP_REDIS_ADDR, APP_HTTP_PORT, APP_LOG_LEVEL).
+# overrides (APP_POSTGRES_DSN, APP_REDIS_ADDR, APP_HTTP_PORT, APP_GRPC_PORT,
+# APP_LOG_LEVEL).
 #
 # This file MUST only contain values needed before any connection exists.
 # Anything else (feature flags, retry counts, provider toggles) belongs in
@@ -13,6 +14,9 @@ addr = "localhost:6379"
 
 [http]
 port = 8080
+
+[grpc]
+port = 9090
 
 [log]
 level = "info"

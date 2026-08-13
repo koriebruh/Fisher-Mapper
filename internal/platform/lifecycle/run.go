@@ -1,17 +1,19 @@
 // Package lifecycle wires long-running processes as oklog/run actors so
-// every actor (fiber server, later: grpc server, asynq worker, outbox
-// relay poller, dynamic-config watcher) shuts down deterministically on
+// every actor (fiber server, grpc server, asynq worker, outbox relay
+// poller, dynamic-config watcher) shuts down deterministically on
 // SIGINT/SIGTERM. There is no "go func()" without an owning actor.
 package lifecycle
 
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/hibiken/asynq"
+	"google.golang.org/grpc"
 )
 
 // FiberActor returns the (execute, interrupt) pair for run.Group.Add,
@@ -60,6 +62,40 @@ func HTTPServerActor(srv *http.Server, shutdownTimeout time.Duration) (execute f
 		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		_ = srv.Shutdown(ctx)
+	}
+	return execute, interrupt
+}
+
+// GRPCServerActor returns the (execute, interrupt) pair for run.Group.Add,
+// serving srv on the already-bound lis (bind it BEFORE calling g.Run() --
+// creating the listener here, inside execute, would turn a bad port/address
+// into an async failure the run.Group only observes after every other actor
+// has already started).
+//
+// interrupt calls GracefulStop in a goroutine bounded by shutdownTimeout
+// (same shutdown-timeout shape as FiberActor), falling back to a hard Stop
+// if it doesn't finish in time -- GracefulStop on its own blocks until every
+// in-flight RPC completes, with no timeout of its own, which would prevent
+// the process from ever exiting on an interrupt with a stuck call in
+// flight.
+func GRPCServerActor(srv *grpc.Server, lis net.Listener, shutdownTimeout time.Duration) (execute func() error, interrupt func(error)) {
+	execute = func() error {
+		if err := srv.Serve(lis); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+			return err
+		}
+		return nil
+	}
+	interrupt = func(error) {
+		stopped := make(chan struct{})
+		go func() {
+			srv.GracefulStop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+		case <-time.After(shutdownTimeout):
+			srv.Stop()
+		}
 	}
 	return execute, interrupt
 }

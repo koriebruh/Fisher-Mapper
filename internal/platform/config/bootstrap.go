@@ -26,6 +26,7 @@ type Bootstrap struct {
 	Postgres Postgres
 	Redis    Redis
 	HTTP     HTTP
+	GRPC     GRPC
 	Log      Log
 }
 
@@ -38,6 +39,14 @@ type Redis struct {
 }
 
 type HTTP struct {
+	Port int `toml:"port"`
+}
+
+// GRPC is the Fase 6 gRPC transport's own listen port -- deliberately its
+// own Bootstrap field (not folded into HTTP) since it is a second, fully
+// independent listener in the same process (cmd/server runs both as
+// separate oklog/run actors, see lifecycle.GRPCServerActor).
+type GRPC struct {
 	Port int `toml:"port"`
 }
 
@@ -58,6 +67,9 @@ type fileConfig struct {
 	HTTP struct {
 		Port *int `toml:"port"`
 	} `toml:"http"`
+	GRPC struct {
+		Port *int `toml:"port"`
+	} `toml:"grpc"`
 	Log struct {
 		Level *string `toml:"level"`
 	} `toml:"log"`
@@ -75,6 +87,9 @@ func defaultBootstrap() Bootstrap {
 		},
 		HTTP: HTTP{
 			Port: 8080,
+		},
+		GRPC: GRPC{
+			Port: 9090,
 		},
 		Log: Log{
 			Level: "info",
@@ -127,6 +142,9 @@ func overlayFile(cfg *Bootstrap, path string) error {
 	if fc.HTTP.Port != nil {
 		cfg.HTTP.Port = *fc.HTTP.Port
 	}
+	if fc.GRPC.Port != nil {
+		cfg.GRPC.Port = *fc.GRPC.Port
+	}
 	if fc.Log.Level != nil {
 		cfg.Log.Level = *fc.Log.Level
 	}
@@ -139,6 +157,7 @@ const (
 	EnvPostgresDSN = "APP_POSTGRES_DSN"
 	EnvRedisAddr   = "APP_REDIS_ADDR"
 	EnvHTTPPort    = "APP_HTTP_PORT"
+	EnvGRPCPort    = "APP_GRPC_PORT"
 	EnvLogLevel    = "APP_LOG_LEVEL"
 )
 
@@ -155,6 +174,13 @@ func overlayEnv(cfg *Bootstrap) error {
 			return fmt.Errorf("config: env %s must be an integer: %w", EnvHTTPPort, err)
 		}
 		cfg.HTTP.Port = port
+	}
+	if v, ok := lookupEnv(EnvGRPCPort); ok {
+		port, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("config: env %s must be an integer: %w", EnvGRPCPort, err)
+		}
+		cfg.GRPC.Port = port
 	}
 	if v, ok := lookupEnv(EnvLogLevel); ok {
 		cfg.Log.Level = v
