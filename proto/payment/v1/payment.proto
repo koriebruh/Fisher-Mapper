@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package payment.v1;
+
+option go_package = "Fisher-Mapper/internal/transport/grpc/pb/payment/v1;paymentv1";
+
+// PaymentService is the gRPC transport for the same payment.Service REST
+// exposes under internal/transport/rest/payment.go and refund.go — thin
+// wrapper, no business logic. See internal/transport/grpc/server.go.
+//
+// Deliberately excluded (out of scope per Fase 6): webhook ingestion and
+// admin/dynamic-config endpoints — both are HTTP-specific (PJP webhook
+// callbacks arrive as HTTP POSTs; /admin/config is an operator-only REST
+// surface), not general-purpose client RPCs.
+service PaymentService {
+  // CreatePayment mirrors REST's POST /payments: it does NOT block for the
+  // provider call. A fresh request always returns status "pending"
+  // (replayed=false); the actual provider call happens later in the async
+  // worker (outbox -> asynq -> ProcessCharge), exactly as it does for REST.
+  // Poll GetPayment for the eventual outcome.
+  rpc CreatePayment(CreatePaymentRequest) returns (CreatePaymentResponse);
+
+  // GetPayment mirrors REST's GET /payments/{id}.
+  rpc GetPayment(GetPaymentRequest) returns (GetPaymentResponse);
+
+  // CreateRefund mirrors REST's POST /payments/{id}/refunds: async by
+  // construction, same as CreatePayment.
+  rpc CreateRefund(CreateRefundRequest) returns (CreateRefundResponse);
+
+  // GetRefund mirrors REST's GET /payments/refunds/{id}.
+  rpc GetRefund(GetRefundRequest) returns (GetRefundResponse);
+}
+
+// CreatePaymentRequest mirrors REST's createPaymentRequest body plus the
+// Idempotency-Key header — gRPC has no header equivalent a client reliably
+// sets, so idempotency_key is a first-class message field instead.
+message CreatePaymentRequest {
+  string idempotency_key = 1;
+  string tenant_id = 2;
+  bool livemode = 3;
+  string currency = 4;
+  // amount is minor units (cents) — int64, never a float. Locked money
+  // invariant (plan "Invarian Uang — Decide Now" item 1).
+  int64 amount = 5;
+  string provider = 6;
+  string payment_method = 7;
+  map<string, string> metadata = 8;
+}
+
+message CreatePaymentResponse {
+  string payment_id = 1;
+  // status is the domain payment.Status value verbatim (pending, processing,
+  // succeeded, failed) — a plain string, not an enum, so it can never drift
+  // out of sync with internal/domain/payment/statemachine.go's own strings.
+  string status = 2;
+  string provider_ref = 3;
+  // replayed has no REST equivalent field (REST signals this via 200-vs-202
+  // instead, see CreatePaymentOutput's json:"-" tag) — gRPC has no analogous
+  // per-call status-code channel available to a handler, so it is a real
+  // response field here. Deliberate transport-level divergence.
+  bool replayed = 4;
+}
+
+message GetPaymentRequest {
+  string payment_id = 1;
+}
+
+message GetPaymentResponse {
+  string payment_id = 1;
+  string tenant_id = 2;
+  bool livemode = 3;
+  string currency = 4;
+  int64 amount = 5;
+  string operation_type = 6;
+  string provider = 7;
+  string provider_ref = 8;
+  string status = 9;
+}
+
+// CreateRefundRequest deliberately has no tenant_id/livemode field — same as
+// REST's CreateRefundInput, those are derived server-side from the locked
+// parent payment row (see rest/refund.go's handleCreateRefund), never taken
+// from the caller, so a request can't point a refund at another tenant.
+message CreateRefundRequest {
+  string idempotency_key = 1;
+  string payment_id = 2;
+  string currency = 3;
+  int64 amount = 4;
+}
+
+message CreateRefundResponse {
+  string refund_id = 1;
+  string payment_id = 2;
+  string status = 3;
+  bool replayed = 4;
+}
+
+message GetRefundRequest {
+  string refund_id = 1;
+}
+
+message GetRefundResponse {
+  string refund_id = 1;
+  string payment_id = 2;
+  string tenant_id = 3;
+  bool livemode = 4;
+  string currency = 5;
+  int64 amount = 6;
+  string provider = 7;
+  string provider_ref = 8;
+  string provider_refund_ref = 9;
+  string status = 10;
+}
