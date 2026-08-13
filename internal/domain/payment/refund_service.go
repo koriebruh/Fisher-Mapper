@@ -11,8 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"Fisher-Mapper/internal/domain/apperror"
-	"Fisher-Mapper/internal/idempotency"
-	"Fisher-Mapper/internal/outbox"
+	"Fisher-Mapper/internal/messaging/idempotency"
+	"Fisher-Mapper/internal/messaging/outbox"
 	"Fisher-Mapper/internal/platform/queue"
 	"Fisher-Mapper/internal/provider"
 )

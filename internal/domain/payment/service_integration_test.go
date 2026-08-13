@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"Fisher-Mapper/internal/domain/apperror"
-	"Fisher-Mapper/internal/idempotency"
+	"Fisher-Mapper/internal/messaging/idempotency"
 	"Fisher-Mapper/internal/provider"
 	"Fisher-Mapper/internal/provider/mock"
 	"Fisher-Mapper/internal/resilience/bulkhead"

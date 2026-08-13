@@ -27,7 +27,8 @@ import (
 	"github.com/oklog/run"
 
 	"Fisher-Mapper/internal/domain/payment"
-	"Fisher-Mapper/internal/idempotency"
+	"Fisher-Mapper/internal/messaging/idempotency"
+	"Fisher-Mapper/internal/messaging/webhook"
 	"Fisher-Mapper/internal/platform/bootstrap"
 	"Fisher-Mapper/internal/platform/config"
 	"Fisher-Mapper/internal/platform/db"
@@ -36,7 +37,6 @@ import (
 	"Fisher-Mapper/internal/platform/secrets/env"
 	"Fisher-Mapper/internal/resilience/ratelimit"
 	"Fisher-Mapper/internal/transport/rest"
-	"Fisher-Mapper/internal/webhook"
 )
 
 const serviceName = "fisher-mapper"

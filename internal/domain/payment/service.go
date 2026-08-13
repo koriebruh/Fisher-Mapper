@@ -12,13 +12,13 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"Fisher-Mapper/internal/domain/apperror"
-	"Fisher-Mapper/internal/idempotency"
-	"Fisher-Mapper/internal/outbox"
+	"Fisher-Mapper/internal/messaging/idempotency"
+	"Fisher-Mapper/internal/messaging/outbox"
+	"Fisher-Mapper/internal/messaging/webhook"
 	"Fisher-Mapper/internal/platform/queue"
 	"Fisher-Mapper/internal/provider"
 	"Fisher-Mapper/internal/resilience/bulkhead"
 	"Fisher-Mapper/internal/resilience/circuitbreaker"
-	"Fisher-Mapper/internal/webhook"
 )
 
 // CreatePaymentInput is the domain-level input for Service.CreatePayment,

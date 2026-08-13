@@ -33,7 +33,7 @@ CREATE UNIQUE INDEX payment_events_provider_event_dedup_idx
     ON payment_events (provider, provider_event_id)
     WHERE provider_event_id IS NOT NULL;
 
--- idempotency_keys backs internal/idempotency.Store: atomic insert on a
+-- idempotency_keys backs internal/messaging/idempotency.Store: atomic insert on a
 -- unique constraint (never check-then-insert), so two concurrent requests
 -- with the same key can never both believe they own the request. Scoped by
 -- tenant_id, consistent with every other transaction-adjacent table having

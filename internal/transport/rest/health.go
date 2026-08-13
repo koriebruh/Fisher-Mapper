@@ -11,12 +11,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"Fisher-Mapper/internal/domain/payment"
+	"Fisher-Mapper/internal/messaging/webhook"
 	"Fisher-Mapper/internal/platform/config"
 	"Fisher-Mapper/internal/platform/queue"
 	"Fisher-Mapper/internal/provider"
 	"Fisher-Mapper/internal/provider/auth"
 	"Fisher-Mapper/internal/resilience/ratelimit"
-	"Fisher-Mapper/internal/webhook"
 )
 
 // Deps are the dependencies the REST transport needs across all route

@@ -1,12 +1,12 @@
 -- +goose Up
 
--- outbox backs internal/outbox: the domain write (payment row insert) and
+-- outbox backs internal/messaging/outbox: the domain write (payment row insert) and
 -- this row are inserted in the SAME Postgres transaction (see
 -- payment.Repository.CreateWithOutbox), so "payment created" and "task
 -- exists to process it" can never diverge -- if the transaction never
 -- commits, neither exists; if it commits, both do.
 --
--- The relay (internal/outbox.Relay) polls WHERE status = 'pending' FOR
+-- The relay (internal/messaging/outbox.Relay) polls WHERE status = 'pending' FOR
 -- UPDATE SKIP LOCKED, dispatches to the queue client, and marks the row
 -- 'dispatched' in the same transaction as the claim. Per the plan's Fase 3
 -- "Catatan desain wajib": retrying a *dispatch* (re-running this poll loop,

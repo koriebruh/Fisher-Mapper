@@ -8,9 +8,9 @@ import (
 
 	"Fisher-Mapper/internal/domain/apperror"
 	"Fisher-Mapper/internal/domain/payment"
+	"Fisher-Mapper/internal/messaging/webhook"
 	"Fisher-Mapper/internal/provider"
 	"Fisher-Mapper/internal/provider/auth"
-	"Fisher-Mapper/internal/webhook"
 )
 
 // WebhookDeps are the dependencies POST /webhooks/:provider needs.

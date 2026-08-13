@@ -26,17 +26,17 @@ import (
 	"github.com/oklog/run"
 
 	"Fisher-Mapper/internal/domain/payment"
-	"Fisher-Mapper/internal/idempotency"
-	"Fisher-Mapper/internal/outbox"
+	"Fisher-Mapper/internal/messaging/idempotency"
+	"Fisher-Mapper/internal/messaging/outbox"
+	"Fisher-Mapper/internal/messaging/reconciliation"
+	"Fisher-Mapper/internal/messaging/webhook"
 	"Fisher-Mapper/internal/platform/bootstrap"
 	"Fisher-Mapper/internal/platform/config"
 	"Fisher-Mapper/internal/platform/db"
 	"Fisher-Mapper/internal/platform/lifecycle"
 	"Fisher-Mapper/internal/platform/queue"
-	"Fisher-Mapper/internal/reconciliation"
 	"Fisher-Mapper/internal/resilience/bulkhead"
 	"Fisher-Mapper/internal/resilience/circuitbreaker"
-	"Fisher-Mapper/internal/webhook"
 )
 
 const serviceName = "fisher-mapper-worker"
@@ -226,7 +226,7 @@ func run_() error {
 
 	// Fase 4 reconciliation job: polls payments stuck "processing" past
 	// reconciliationStuckThreshold and sweeps staged webhook events with no
-	// matching payment yet. See internal/reconciliation and
+	// matching payment yet. See internal/messaging/reconciliation and
 	// internal/domain/payment/reconcile.go.
 	reconciler := reconciliation.New(paymentService, reconciliationPollInterval, reconciliationStuckThreshold)
 

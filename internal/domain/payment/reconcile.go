@@ -1,5 +1,5 @@
 // Fase 4 reconciliation support. The actual polling loop/actor lives in
-// internal/reconciliation (a thin oklog/run actor); every piece of business
+// internal/messaging/reconciliation (a thin oklog/run actor); every piece of business
 // logic that touches the state machine or the "never trust GetStatus
 // blindly" money invariant lives here, in the domain service, for the same
 // reason ProcessCharge does: it needs Repository.ApplyTransition under the
@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"Fisher-Mapper/internal/domain/apperror"
+	"Fisher-Mapper/internal/messaging/webhook"
 	"Fisher-Mapper/internal/provider"
-	"Fisher-Mapper/internal/webhook"
 )
 
 // ListStuckProcessing returns payments that have been in StatusProcessing
@@ -28,7 +28,7 @@ func (s *Service) ListStuckProcessing(ctx context.Context, threshold time.Durati
 
 // FindPaymentByProviderRef looks up a payment by (provider, providerRef) —
 // exposed on Service (rather than requiring callers to depend on Repository
-// directly) so internal/reconciliation's webhook sweep can resolve a staged
+// directly) so internal/messaging/reconciliation's webhook sweep can resolve a staged
 // event's provider_ref to a payment id without importing anything beyond
 // this service.
 func (s *Service) FindPaymentByProviderRef(ctx context.Context, providerName, providerRef string) (*Payment, error) {
