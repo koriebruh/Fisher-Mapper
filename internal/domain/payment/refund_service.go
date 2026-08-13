@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel/attribute"
 
 	"Fisher-Mapper/internal/domain/apperror"
 	"Fisher-Mapper/internal/messaging/idempotency"
@@ -57,6 +58,10 @@ type RefundTaskInput struct {
 	// refund-create time -- provider.RefundRequest needs it, and by the time
 	// ProcessRefund runs the payment row itself is no longer looked up.
 	PaymentProviderRef string `json:"payment_provider_ref"`
+
+	// TraceCarrier mirrors ChargeTaskInput.TraceCarrier -- see worker.go's
+	// injectTraceCarrier/extractTraceCarrierAndStartSpan doc.
+	TraceCarrier map[string]string `json:"trace_carrier,omitempty"`
 }
 
 // CreateRefund creates a refund against an existing (succeeded) payment,
@@ -131,6 +136,7 @@ func (s *Service) doCreateRefund(ctx context.Context, in CreateRefundInput, idem
 		TenantID:       in.TenantID,
 		Livemode:       in.Livemode,
 		Amount:         in.Amount,
+		TraceCarrier:   injectTraceCarrier(ctx),
 	}
 
 	err = rr.CreateRefundWithOutbox(ctx, ref, func(ctx context.Context, tx pgx.Tx) error {
@@ -178,6 +184,12 @@ func (s *Service) doCreateRefund(ctx context.Context, in CreateRefundInput, idem
 // GetStatus-based refund reconciliation, out of scope for this phase -- see
 // phase report), never by an automatic retry.
 func (s *Service) ProcessRefund(ctx context.Context, in RefundTaskInput) error {
+	ctx, span := extractTraceCarrierAndStartSpan(ctx, in.TraceCarrier, "ProcessRefund",
+		attribute.String("refund_id", in.RefundID.String()),
+		attribute.String("provider", in.Provider),
+	)
+	defer span.End()
+
 	if !s.isProviderEnabled(in.Provider) {
 		return apperror.New(apperror.CodeProviderDisabled, "process refund: provider "+in.Provider+" is disabled via dynamic config")
 	}

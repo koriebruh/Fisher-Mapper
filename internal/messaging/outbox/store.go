@@ -17,6 +17,7 @@ package outbox
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -29,6 +30,10 @@ type Row struct {
 	TaskType string
 	Payload  []byte
 	Attempts int
+	// CreatedAt backs the Fase 5 outbox-dispatch-lag metric (Relay records
+	// time.Since(CreatedAt) once dispatch succeeds) -- not used for
+	// anything else, dispatch logic itself only ever needs status/id.
+	CreatedAt time.Time
 }
 
 // queryRower is satisfied by both *pgxpool.Pool and pgx.Tx -- Insert works
@@ -71,7 +76,7 @@ func NewStore(pool *pgxpool.Pool) *Store {
 // begin-claim-dispatch-commit loop doesn't let a test observe from outside.
 func claim(ctx context.Context, tx pgx.Tx, limit int) ([]Row, error) {
 	const selectSQL = `
-		SELECT id, task_type, payload, attempts
+		SELECT id, task_type, payload, attempts, created_at
 		FROM outbox
 		WHERE status = 'pending'
 		ORDER BY created_at
@@ -87,7 +92,7 @@ func claim(ctx context.Context, tx pgx.Tx, limit int) ([]Row, error) {
 	var out []Row
 	for rows.Next() {
 		var r Row
-		if err := rows.Scan(&r.ID, &r.TaskType, &r.Payload, &r.Attempts); err != nil {
+		if err := rows.Scan(&r.ID, &r.TaskType, &r.Payload, &r.Attempts, &r.CreatedAt); err != nil {
 			return nil, fmt.Errorf("outbox: claim: scan: %w", err)
 		}
 		out = append(out, r)

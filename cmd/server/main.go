@@ -24,7 +24,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/adaptor"
 	"github.com/oklog/run"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"Fisher-Mapper/internal/domain/payment"
 	"Fisher-Mapper/internal/messaging/idempotency"
@@ -33,6 +36,7 @@ import (
 	"Fisher-Mapper/internal/platform/config"
 	"Fisher-Mapper/internal/platform/db"
 	"Fisher-Mapper/internal/platform/lifecycle"
+	"Fisher-Mapper/internal/platform/observability"
 	"Fisher-Mapper/internal/platform/queue"
 	"Fisher-Mapper/internal/platform/secrets/env"
 	"Fisher-Mapper/internal/resilience/ratelimit"
@@ -47,6 +51,11 @@ const serviceName = "fisher-mapper"
 // points observe a change; that is bounded by the worker's own Cache.Run
 // interval, since they are different processes sharing only the DB.
 const serverDynamicConfigRefreshInterval = 30 * time.Second
+
+// metricsPollInterval governs the Fase 5 DB-pool-stats poller actor (this
+// process's own pgxpool.Pool -- it never writes terminal_failures, so unlike
+// cmd/worker it has nothing to poll there).
+const metricsPollInterval = 15 * time.Second
 
 func main() {
 	if err := run_(); err != nil {
@@ -90,6 +99,33 @@ func run_() error {
 			logger.Error("shutdown tracer provider", "error", err)
 		}
 	}()
+
+	// Fase 5 metrics: a Prometheus-backed MeterProvider, set globally BEFORE
+	// rest.NewApp below constructs the otelfiber tracing middleware and this
+	// process's own metrics middleware -- both resolve global providers at
+	// construction time, so ordering here matters (see health.go's NewApp
+	// doc). Never fails process startup: same "diagnostic, not load-bearing"
+	// treatment as the tracer.
+	meterProvider, promRegistry, err := observability.NewMeterProvider(ctx, serviceName)
+	var metrics *observability.Metrics
+	if err != nil {
+		logger.Warn("observability: failed to build meter provider, metrics disabled", "error", err)
+	} else {
+		metrics, err = observability.NewMetrics(meterProvider.Meter(serviceName))
+		if err != nil {
+			logger.Warn("observability: failed to build metric instruments, metrics disabled", "error", err)
+			metrics = nil
+		}
+	}
+	if meterProvider != nil {
+		defer func() {
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer shutdownCancel()
+			if err := meterProvider.Shutdown(shutdownCtx); err != nil {
+				logger.Error("shutdown meter provider", "error", err)
+			}
+		}()
+	}
 
 	// 3. Connect Postgres.
 	pool, err := db.NewPool(ctx, cfg.Postgres.DSN)
@@ -160,6 +196,15 @@ func run_() error {
 		logger.Warn("admin_api_key not configured; /admin/config will reject every request until it is set")
 	}
 
+	// Fase 5: GET /metrics, wrapped for fiber via middleware/adaptor so
+	// rest.NewApp doesn't need its own prometheus/promhttp dependency.
+	// promRegistry is nil if meter-provider construction failed above (fully
+	// nil-safe: the handler and middleware are both simply omitted below).
+	var metricsHandler fiber.Handler
+	if promRegistry != nil {
+		metricsHandler = adaptor.HTTPHandler(promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{}))
+	}
+
 	// 6. Transport: single fiber app with health + payment + webhook +
 	// admin-config endpoints.
 	app := rest.NewApp(rest.Deps{
@@ -173,6 +218,8 @@ func run_() error {
 		DynamicConfigStore: dynamicStore,
 		DynamicConfigCache: dynamicCache,
 		AdminAPIKey:        adminAPIKey,
+		Metrics:            metrics,
+		MetricsHandler:     metricsHandler,
 	})
 
 	addr := fmt.Sprintf(":%d", cfg.HTTP.Port)
@@ -195,6 +242,15 @@ func run_() error {
 	// cache-backed feature added to this process, gets it for free).
 	dynConfigExecute, dynConfigInterrupt := lifecycle.RunnerActor(dynamicCache.Run)
 	g.Add(dynConfigExecute, dynConfigInterrupt)
+
+	// Fase 5 metrics poller: this process's own DB pool stats only (see
+	// metricsPollInterval doc) -- no-op if metrics is nil (meter provider
+	// failed to build above).
+	if metrics != nil {
+		poller := observability.NewPoller(pool, nil, metrics, metricsPollInterval)
+		pollerExecute, pollerInterrupt := lifecycle.RunnerActor(poller.Run)
+		g.Add(pollerExecute, pollerInterrupt)
+	}
 
 	logger.Info("starting server", "addr", addr)
 	if err := g.Run(); err != nil && !errors.Is(err, run.ErrSignal) {

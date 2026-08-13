@@ -54,6 +54,15 @@ type Relay struct {
 	// once at boot instead, because the consuming asynq.Server's queue set
 	// is fixed at construction and cannot be changed live.
 	queueName func() string
+
+	// dispatchLagRecorder is the Fase 5 outbox-dispatch-lag metric hook,
+	// called with time.Since(row.CreatedAt) immediately after a successful
+	// client.Enqueue -- this IS the "outbox-dispatch-related" observability
+	// signal for this phase (deliberately not a separate span: the lag
+	// value already carries the timing information a span's duration would,
+	// without an extra JSON unmarshal/trace-extract per row on the hot
+	// dispatch path). nil disables recording (e.g. tests).
+	dispatchLagRecorder func(ctx context.Context, taskType string, lag time.Duration)
 }
 
 // NewRelay builds a Relay. baseInterval is the poll cadence while dispatch
@@ -87,6 +96,13 @@ func (r *Relay) WithProviderEnabledCheck(fn func(providerName string) bool) *Rel
 // chaining.
 func (r *Relay) WithQueueName(fn func() string) *Relay {
 	r.queueName = fn
+	return r
+}
+
+// WithDispatchLagRecorder wires the Fase 5 outbox-dispatch-lag metric hook.
+// Returns r for chaining.
+func (r *Relay) WithDispatchLagRecorder(fn func(ctx context.Context, taskType string, lag time.Duration)) *Relay {
+	r.dispatchLagRecorder = fn
 	return r
 }
 
@@ -174,5 +190,11 @@ func (r *Relay) dispatchOne(ctx context.Context, row Row) error {
 	if r.queueName != nil {
 		opts.QueueName = r.queueName()
 	}
-	return r.client.Enqueue(ctx, row.TaskType, row.Payload, opts)
+	if err := r.client.Enqueue(ctx, row.TaskType, row.Payload, opts); err != nil {
+		return err
+	}
+	if r.dispatchLagRecorder != nil && !row.CreatedAt.IsZero() {
+		r.dispatchLagRecorder(ctx, row.TaskType, time.Since(row.CreatedAt))
+	}
+	return nil
 }

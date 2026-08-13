@@ -108,6 +108,9 @@ func (s *Service) ReconcilePayment(ctx context.Context, p *Payment) error {
 			"payment_id", p.ID,
 			"stored_amount", fresh.Amount, "stored_currency", fresh.Currency,
 			"provider_amount", statusResp.Amount, "provider_currency", statusResp.Currency)
+		if s.onReconciliationMismatch != nil {
+			s.onReconciliationMismatch(ctx)
+		}
 		return nil
 	}
 

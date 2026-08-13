@@ -6,6 +6,10 @@ import (
 	"log/slog"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 
 	"Fisher-Mapper/internal/domain/apperror"
 	"Fisher-Mapper/internal/messaging/webhook"
@@ -26,6 +30,35 @@ type ChargeTaskInput struct {
 	Provider       string            `json:"provider"`
 	PaymentMethod  string            `json:"payment_method"`
 	Metadata       map[string]string `json:"metadata"`
+
+	// TraceCarrier is the Fase 5 trace-propagation payload: the W3C
+	// traceparent (+ tracestate, if any) captured via
+	// otel.GetTextMapPropagator().Inject at outbox-insert time (see
+	// Service.doCreatePayment), so ProcessCharge can Extract it and start a
+	// span that is a CHILD of the HTTP request span that created this
+	// payment -- one connected trace across the create -> outbox -> queue ->
+	// worker boundary, instead of ProcessCharge starting a disconnected root
+	// trace. Requires otel.SetTextMapPropagator to have been called with a
+	// real (non-no-op) propagator at process boot -- see
+	// bootstrap.RegisterObservability.
+	TraceCarrier map[string]string `json:"trace_carrier,omitempty"`
+}
+
+// injectTraceCarrier captures ctx's current span (if any) as a
+// propagation.MapCarrier, for embedding into an outbox task payload.
+func injectTraceCarrier(ctx context.Context) map[string]string {
+	carrier := propagation.MapCarrier{}
+	otel.GetTextMapPropagator().Inject(ctx, carrier)
+	return carrier
+}
+
+// extractTraceCarrierAndStartSpan re-hydrates a remote span context from
+// carrier (as injected by injectTraceCarrier) and starts a new span as its
+// child, named name. Returns the derived context (use this for everything
+// downstream) and the span (caller must End() it).
+func extractTraceCarrierAndStartSpan(ctx context.Context, carrier map[string]string, name string, attrs ...attribute.KeyValue) (context.Context, trace.Span) {
+	ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier(carrier))
+	return otel.Tracer("fisher-mapper-worker").Start(ctx, name, trace.WithAttributes(attrs...))
 }
 
 // ProcessCharge is the Fase 3 worker-side handler for TaskTypeCharge tasks:
@@ -55,6 +88,12 @@ type ChargeTaskInput struct {
 // genuinely unexpected failures (unregistered provider, a DB write
 // failing) that SHOULD land in terminal_failures for manual inspection.
 func (s *Service) ProcessCharge(ctx context.Context, in ChargeTaskInput) error {
+	ctx, span := extractTraceCarrierAndStartSpan(ctx, in.TraceCarrier, "ProcessCharge",
+		attribute.String("payment_id", in.PaymentID.String()),
+		attribute.String("provider", in.Provider),
+	)
+	defer span.End()
+
 	// Checked BEFORE the CAS, same reasoning as the unregistered-provider
 	// check below: a disabled provider is a config condition that will
 	// fail identically on any redelivery, so there is nothing to gain by

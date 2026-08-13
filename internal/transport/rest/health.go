@@ -6,6 +6,7 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/gofiber/contrib/otelfiber/v2"
 	"github.com/gofiber/fiber/v2"
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -13,6 +14,7 @@ import (
 	"Fisher-Mapper/internal/domain/payment"
 	"Fisher-Mapper/internal/messaging/webhook"
 	"Fisher-Mapper/internal/platform/config"
+	"Fisher-Mapper/internal/platform/observability"
 	"Fisher-Mapper/internal/platform/queue"
 	"Fisher-Mapper/internal/provider"
 	"Fisher-Mapper/internal/provider/auth"
@@ -38,12 +40,38 @@ type Deps struct {
 	DynamicConfigStore *config.DynamicStore
 	DynamicConfigCache *config.Cache
 	AdminAPIKey        string
+	// Metrics and MetricsHandler are Fase 5 additions (either nil disables
+	// the corresponding piece -- e.g. in tests that don't care about
+	// metrics). Metrics backs the per-request latency middleware;
+	// MetricsHandler is the actual GET /metrics route handler (a
+	// promhttp.Handler wrapped for fiber via middleware/adaptor, built by
+	// main() -- kept out of this package so it doesn't need its own
+	// dependency on prometheus/promhttp or the exporter's registry). See
+	// internal/platform/observability/metrics.go.
+	Metrics        *observability.Metrics
+	MetricsHandler fiber.Handler
 }
 
 func NewApp(deps Deps) *fiber.App {
 	app := fiber.New(fiber.Config{
 		DisableStartupMessage: true,
 	})
+
+	// otelfiber gives every request a span (Fase 5 item 2), using whatever
+	// TracerProvider/Propagator are globally installed at THIS call time --
+	// callers (cmd/server) must call bootstrap.RegisterObservability (which
+	// sets both) before NewApp, or requests trace under a no-op provider
+	// with no error anywhere. Metrics are handled by our own middleware
+	// below (RegisterMetricsMiddleware), not otelfiber's built-in module --
+	// WithoutMetrics avoids shipping two competing HTTP-latency histograms.
+	app.Use(otelfiber.Middleware(otelfiber.WithoutMetrics(true)))
+
+	if deps.Metrics != nil {
+		RegisterMetricsMiddleware(app, deps.Metrics)
+	}
+	if deps.MetricsHandler != nil {
+		app.Get("/metrics", deps.MetricsHandler)
+	}
 
 	RegisterHealthRoutes(app, deps)
 

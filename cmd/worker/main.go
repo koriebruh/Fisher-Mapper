@@ -18,12 +18,16 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"syscall"
 	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/oklog/run"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 
 	"Fisher-Mapper/internal/domain/payment"
 	"Fisher-Mapper/internal/messaging/idempotency"
@@ -34,6 +38,7 @@ import (
 	"Fisher-Mapper/internal/platform/config"
 	"Fisher-Mapper/internal/platform/db"
 	"Fisher-Mapper/internal/platform/lifecycle"
+	"Fisher-Mapper/internal/platform/observability"
 	"Fisher-Mapper/internal/platform/queue"
 	"Fisher-Mapper/internal/resilience/bulkhead"
 	"Fisher-Mapper/internal/resilience/circuitbreaker"
@@ -66,7 +71,23 @@ const (
 	// (since its last applied event) before the job will touch it at all.
 	reconciliationPollInterval   = 15 * time.Second
 	reconciliationStuckThreshold = 1 * time.Minute
+
+	// Fase 5 metrics: metricsPollInterval governs the DB-pool-stats +
+	// terminal_failures-depth poller actor (see internal/platform/observability.Poller).
+	metricsPollInterval = 15 * time.Second
 )
+
+// defaultWorkerMetricsPort is deliberately DIFFERENT from cmd/server's
+// implicit metrics exposure (cmd/server serves /metrics on its own HTTP
+// port, cfg.HTTP.Port) -- this process has no fiber app/HTTP port of its
+// own, and per the Makefile, cmd/server and cmd/worker normally run as two
+// processes on the SAME host (not two docker-compose containers), so this
+// needs its own port to avoid a bind conflict. Read directly via
+// APP_WORKER_METRICS_PORT (like configPath's APP_CONFIG_FILE below) rather
+// than added to the shared config.Bootstrap struct/config.toml, since that
+// struct is loaded identically by both binaries -- a single shared port
+// field would collide the same way.
+const defaultWorkerMetricsPort = "9101"
 
 func main() {
 	if err := run_(); err != nil {
@@ -108,6 +129,29 @@ func run_() error {
 			logger.Error("shutdown tracer provider", "error", err)
 		}
 	}()
+
+	// Fase 5 metrics: same "never fail startup over an observability
+	// dependency" treatment as cmd/server.
+	meterProvider, promRegistry, err := observability.NewMeterProvider(ctx, serviceName)
+	var metrics *observability.Metrics
+	if err != nil {
+		logger.Warn("observability: failed to build meter provider, metrics disabled", "error", err)
+	} else {
+		metrics, err = observability.NewMetrics(meterProvider.Meter(serviceName))
+		if err != nil {
+			logger.Warn("observability: failed to build metric instruments, metrics disabled", "error", err)
+			metrics = nil
+		}
+	}
+	if meterProvider != nil {
+		defer func() {
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer shutdownCancel()
+			if err := meterProvider.Shutdown(shutdownCtx); err != nil {
+				logger.Error("shutdown meter provider", "error", err)
+			}
+		}()
+	}
 
 	pool, err := db.NewPool(ctx, cfg.Postgres.DSN)
 	if err != nil {
@@ -162,6 +206,13 @@ func run_() error {
 		WithCircuitBreakers(breakers).
 		WithBulkhead(bulkheadLimiter).
 		WithProviderEnabledCheck(dynamicCache.ProviderEnabled)
+	if metrics != nil {
+		// Fase 5 reconciliation-mismatch counter -- see
+		// internal/domain/payment/reconcile.go's onReconciliationMismatch call site.
+		paymentService = paymentService.WithReconciliationMismatchHook(func(ctx context.Context) {
+			metrics.ReconciliationMismatch.Add(ctx, 1)
+		})
+	}
 
 	chargeHandler := func(ctx context.Context, payload []byte) error {
 		var in payment.ChargeTaskInput
@@ -209,6 +260,11 @@ func run_() error {
 	relay := outbox.NewRelay(outboxStore, switchingClient, relayBaseInterval, relayMaxInterval, relayBatchSize).
 		WithProviderEnabledCheck(dynamicCache.ProviderEnabled).
 		WithQueueName(func() string { return queueName })
+	if metrics != nil {
+		relay = relay.WithDispatchLagRecorder(func(ctx context.Context, taskType string, lag time.Duration) {
+			metrics.OutboxDispatchLag.Record(ctx, lag.Seconds(), metric.WithAttributes(attribute.String("task_type", taskType)))
+		})
+	}
 
 	// asynq task server: the real (Redis-backed) consumption side. The
 	// memory fallback's consumption side is memoryClient itself (it
@@ -258,6 +314,33 @@ func run_() error {
 
 	reconcileExecute, reconcileInterrupt := lifecycle.RunnerActor(reconciler.Run)
 	g.Add(reconcileExecute, reconcileInterrupt)
+
+	// Fase 5 metrics poller: this process's own DB pool stats + the
+	// terminal_failures depth gauge (see metrics.go's doc on why this
+	// process, not cmd/server, owns that count).
+	if metrics != nil {
+		poller := observability.NewPoller(pool, terminalFailures.Count, metrics, metricsPollInterval)
+		pollerExecute, pollerInterrupt := lifecycle.RunnerActor(poller.Run)
+		g.Add(pollerExecute, pollerInterrupt)
+	}
+
+	// Fase 5 metrics endpoint: this process has no fiber app of its own
+	// (unlike cmd/server), so /metrics gets a dedicated, minimal net/http
+	// listener on its own port instead of a fiber route -- see
+	// defaultWorkerMetricsPort's doc for why that port can't come from the
+	// shared config.Bootstrap struct.
+	if promRegistry != nil {
+		metricsMux := http.NewServeMux()
+		metricsMux.Handle("/metrics", promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{}))
+		metricsPort := os.Getenv("APP_WORKER_METRICS_PORT")
+		if metricsPort == "" {
+			metricsPort = defaultWorkerMetricsPort
+		}
+		metricsSrv := &http.Server{Addr: ":" + metricsPort, Handler: metricsMux}
+		metricsExecute, metricsInterrupt := lifecycle.HTTPServerActor(metricsSrv, 5*time.Second)
+		g.Add(metricsExecute, metricsInterrupt)
+		logger.Info("worker metrics endpoint listening", "addr", metricsSrv.Addr)
+	}
 
 	logger.Info("starting worker", "redis_addr", cfg.Redis.Addr)
 	if err := g.Run(); err != nil && !errors.Is(err, run.ErrSignal) {

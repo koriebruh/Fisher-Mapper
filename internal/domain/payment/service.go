@@ -94,6 +94,17 @@ type Service struct {
 	// "always enabled" (backward compatible: cmd/server's HTTP-only Service
 	// never sets this, and does not need to -- it never calls a provider).
 	providerEnabled func(providerName string) bool
+
+	// onReconciliationMismatch is the Fase 5 reconciliation-mismatch-count
+	// metric hook, injected the same way (a plain func, not an
+	// internal/platform/observability import) for the identical reason: the
+	// domain layer stays decoupled from the metrics/observability stack.
+	// Takes ctx (unlike providerEnabled) so the metric recording at the call
+	// site can eventually carry an exemplar linking it back to the
+	// reconciliation pass's trace, once one exists. nil means "no metric
+	// wired" (e.g. cmd/server's HTTP-only Service, which never reconciles
+	// anything).
+	onReconciliationMismatch func(ctx context.Context)
 }
 
 func NewService(repo Repository, idem idempotency.Store, providers providerRegistry) *Service {
@@ -137,6 +148,14 @@ func (s *Service) WithBulkhead(limiter *bulkhead.Limiter) *Service {
 // DB round-trip happens per payment/refund). Returns s for chaining.
 func (s *Service) WithProviderEnabledCheck(fn func(providerName string) bool) *Service {
 	s.providerEnabled = fn
+	return s
+}
+
+// WithReconciliationMismatchHook wires the Fase 5 metric hook fn, called
+// once per detected amount/currency mismatch inside ReconcilePayment (see
+// reconcile.go). Returns s for chaining.
+func (s *Service) WithReconciliationMismatchHook(fn func(ctx context.Context)) *Service {
+	s.onReconciliationMismatch = fn
 	return s
 }
 
@@ -244,6 +263,11 @@ func (s *Service) doCreatePayment(ctx context.Context, in CreatePaymentInput, id
 		Provider:       in.Provider,
 		PaymentMethod:  in.PaymentMethod,
 		Metadata:       in.Metadata,
+		// Fase 5 item 5: snapshot ctx's current span (the HTTP request span,
+		// if the caller is rest.handleCreatePayment using c.UserContext())
+		// so ProcessCharge can continue the same trace -- see
+		// injectTraceCarrier's doc in worker.go.
+		TraceCarrier: injectTraceCarrier(ctx),
 	}
 
 	err := s.repo.CreateWithOutbox(ctx, p, func(ctx context.Context, tx pgx.Tx) error {

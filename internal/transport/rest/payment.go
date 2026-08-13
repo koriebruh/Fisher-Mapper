@@ -70,7 +70,12 @@ func handleCreatePayment(deps PaymentDeps) fiber.Handler {
 			Metadata:      req.Metadata,
 		}
 
-		out, err := deps.Service.CreatePayment(c.Context(), input, idempotencyKey, raw)
+		// UserContext (not Context): otelfiber's tracing middleware stores
+		// the per-request span there via c.SetUserContext -- the service
+		// call, and everything it does transitively (outbox insert, trace
+		// carrier injection), must run under that context for the create
+		// -> outbox -> worker trace to connect (Fase 5 item 5).
+		out, err := deps.Service.CreatePayment(c.UserContext(), input, idempotencyKey, raw)
 		if err != nil {
 			return writeError(c, err)
 		}
@@ -103,7 +108,7 @@ func handleGetPayment(deps PaymentDeps) fiber.Handler {
 			return writeError(c, apperror.New(apperror.CodeValidation, "invalid payment id"))
 		}
 
-		p, err := deps.Service.GetPayment(c.Context(), id)
+		p, err := deps.Service.GetPayment(c.UserContext(), id)
 		if err != nil {
 			return writeError(c, err)
 		}

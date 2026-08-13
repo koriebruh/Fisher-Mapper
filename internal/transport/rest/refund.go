@@ -40,7 +40,7 @@ func handleCreateRefund(deps PaymentDeps) fiber.Handler {
 			}
 		}
 
-		p, err := deps.Service.GetPayment(c.Context(), paymentID)
+		p, err := deps.Service.GetPayment(c.UserContext(), paymentID)
 		if err != nil {
 			return writeError(c, err)
 		}
@@ -53,7 +53,7 @@ func handleCreateRefund(deps PaymentDeps) fiber.Handler {
 			Amount:    req.Amount,
 		}
 
-		out, err := deps.Service.CreateRefund(c.Context(), input, idempotencyKey, raw)
+		out, err := deps.Service.CreateRefund(c.UserContext(), input, idempotencyKey, raw)
 		if err != nil {
 			return writeError(c, err)
 		}
@@ -80,7 +80,7 @@ func handleGetRefund(deps PaymentDeps) fiber.Handler {
 			return writeError(c, apperror.New(apperror.CodeValidation, "invalid refund id"))
 		}
 
-		r, err := deps.Service.GetRefund(c.Context(), id)
+		r, err := deps.Service.GetRefund(c.UserContext(), id)
 		if err != nil {
 			return writeError(c, err)
 		}

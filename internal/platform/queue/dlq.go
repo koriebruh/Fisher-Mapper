@@ -2,6 +2,7 @@ package queue
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/hibiken/asynq"
@@ -39,6 +40,21 @@ func (r *TerminalFailureRecorder) Record(ctx context.Context, taskType, taskID s
 	if _, err := r.pool.Exec(ctx, insertSQL, taskType, taskID, payload, errMsg); err != nil {
 		slog.Error("queue: record terminal failure", "error", err, "task_type", taskType, "task_id", taskID)
 	}
+}
+
+// Count reports the cumulative number of terminal_failures rows -- the
+// Fase 5 DLQ-depth metric's data source (internal/platform/observability.Poller
+// polls this periodically). terminal_failures has no resolution/ack column,
+// so this is a monotonically non-decreasing total, not a live queue depth --
+// see docs/observability-alerts.md for how the alert threshold accounts for
+// that.
+func (r *TerminalFailureRecorder) Count(ctx context.Context) (int64, error) {
+	const sql = `SELECT count(*) FROM terminal_failures`
+	var n int64
+	if err := r.pool.QueryRow(ctx, sql).Scan(&n); err != nil {
+		return 0, fmt.Errorf("queue: count terminal failures: %w", err)
+	}
+	return n, nil
 }
 
 // AsynqErrorHandler adapts Record into an asynq.ErrorHandlerFunc for

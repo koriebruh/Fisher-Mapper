@@ -14,6 +14,9 @@ import (
 	"log/slog"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+
 	"Fisher-Mapper/internal/platform/config"
 	"Fisher-Mapper/internal/platform/observability"
 	"Fisher-Mapper/internal/platform/secrets/env"
@@ -45,6 +48,16 @@ type Observability struct {
 func RegisterObservability(ctx context.Context, cfg config.Bootstrap, serviceName string, otelEnabled bool) Observability {
 	logger := observability.NewLogger(cfg.Log.Level)
 	slog.SetDefault(logger)
+
+	// W3C tracecontext propagator, set globally exactly once here (both
+	// cmd/server and cmd/worker go through this call): otel's default global
+	// propagator is a no-op composite, so without this, otelfiber's inbound
+	// header extraction AND the outbox->asynq traceparent inject/extract
+	// (Fase 5 item 5, see payment.ChargeTaskInput.TraceCarrier) would each
+	// silently produce an empty carrier -- no error anywhere, just disjoint
+	// traces. Fixed to TraceContext (not a composite with baggage) since
+	// nothing here uses OTel baggage today.
+	otel.SetTextMapPropagator(propagation.TraceContext{})
 
 	tracer := observability.NewTracerManager(ctx, serviceName, otelEnabled)
 

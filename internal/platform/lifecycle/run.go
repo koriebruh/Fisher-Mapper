@@ -6,6 +6,8 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -39,6 +41,25 @@ func RunnerActor(run func(ctx context.Context) error) (execute func() error, int
 	}
 	interrupt = func(error) {
 		cancel()
+	}
+	return execute, interrupt
+}
+
+// HTTPServerActor adapts a plain *http.Server into an (execute, interrupt)
+// pair for run.Group.Add -- the Fase 5 metrics-endpoint listener in
+// cmd/worker, which has no fiber.App of its own (unlike cmd/server, whose
+// /metrics route is just another fiber route -- see FiberActor).
+func HTTPServerActor(srv *http.Server, shutdownTimeout time.Duration) (execute func() error, interrupt func(error)) {
+	execute = func() error {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	}
+	interrupt = func(error) {
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
 	}
 	return execute, interrupt
 }

@@ -34,7 +34,9 @@ func RegisterWebhookRoutes(app *fiber.App, deps WebhookDeps) {
 
 func handleWebhook(deps WebhookDeps) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		ctx := c.Context()
+		// UserContext, not Context -- see payment.go's handleCreatePayment for
+		// why (otelfiber stores the request span there).
+		ctx := c.UserContext()
 		providerName := c.Params("provider")
 
 		prov, err := deps.Providers.Get(providerName)

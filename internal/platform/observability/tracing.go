@@ -83,6 +83,16 @@ func buildStdoutTracerProvider(ctx context.Context, serviceName string) (*sdktra
 	return sdktrace.NewTracerProvider(sdktrace.WithBatcher(exporter), sdktrace.WithResource(res)), nil
 }
 
+// otelgrpc readiness (Fase 5 item 1, Fase 6 groundwork): Fase 6 does not
+// exist yet, so there is no gRPC server to attach an interceptor to today.
+// Nothing about that phase requires changes here, though -- TracerManager
+// always installs its provider via otel.SetTracerProvider (the process-wide
+// global), and otelgrpc.NewServerHandler() (or
+// otelgrpc.NewClientHandler()), like every otel-instrumented library,
+// resolves the tracer via otel.GetTracerProvider() at construction time by
+// default. Fase 6 can pass that stats handler into grpc.NewServer(...) with
+// zero changes to this file or to bootstrap.RegisterObservability.
+
 // Reconcile swaps the installed provider if enabled differs from what is
 // currently installed, shutting down the superseded provider. Call once per
 // process right after dynamic config becomes available (not from the
