@@ -1,6 +1,6 @@
 // Command migrate applies pending goose migrations against the Postgres
-// instance described by bootstrap config (configs/config.toml + env
-// overrides), using the same config loader and connection helpers as
+// instance described by bootstrap config (config.toml at the repo root +
+// env overrides), using the same config loader and connection helpers as
 // cmd/server so there is exactly one source of truth for the DSN.
 //
 // It is intentionally a separate binary from cmd/server: schema migration
@@ -27,6 +27,11 @@ func main() {
 
 	logger := observability.NewLogger("info")
 	slog.SetDefault(logger)
+
+	// Load .env (repo root), if present, BEFORE bootstrap config below --
+	// its values must be in the process environment before config.Load's
+	// env var overlay step runs.
+	config.LoadDotEnv()
 
 	ctx := context.Background()
 
@@ -67,5 +72,5 @@ func configPath() string {
 	if v := os.Getenv("APP_CONFIG_FILE"); v != "" {
 		return v
 	}
-	return "configs/config.toml"
+	return "config.toml"
 }

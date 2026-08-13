@@ -3,7 +3,7 @@
 //
 // Load order is explicit and MUST NOT be reordered:
 //  1. hardcoded defaults (defaultBootstrap)
-//  2. configs/config.toml overlay, if present
+//  2. config.toml (repo root) overlay, if present
 //  3. environment variable overrides
 //
 // Dynamic config (feature flags, retry counts, ...) lives in Postgres

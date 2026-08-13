@@ -79,6 +79,11 @@ func run_() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Load .env (repo root), if present, BEFORE bootstrap config below --
+	// its values must be in the process environment before config.Load's
+	// env var overlay step (and LoadDynamicSeed) run.
+	config.LoadDotEnv()
+
 	cfg, err := config.Load(configPath())
 	if err != nil {
 		return fmt.Errorf("load bootstrap config: %w", err)
@@ -266,5 +271,5 @@ func configPath() string {
 	if v := os.Getenv("APP_CONFIG_FILE"); v != "" {
 		return v
 	}
-	return "configs/config.toml"
+	return "config.toml"
 }
