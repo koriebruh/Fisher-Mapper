@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"Fisher-Mapper/internal/apperror"
+	"Fisher-Mapper/internal/domain/apperror"
 )
 
 // fixedClock returns a fixed time.Time, so the ±window test below is

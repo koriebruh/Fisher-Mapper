@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"Fisher-Mapper/internal/apperror"
+	"Fisher-Mapper/internal/domain/apperror"
 )
 
 // RefundTransitionParams bundles the arguments for

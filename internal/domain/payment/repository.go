@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"Fisher-Mapper/internal/apperror"
+	"Fisher-Mapper/internal/domain/apperror"
 )
 
 // TransitionParams bundles the arguments for Repository.ApplyTransition.

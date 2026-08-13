@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"Fisher-Mapper/internal/apperror"
+	"Fisher-Mapper/internal/domain/apperror"
 	"Fisher-Mapper/internal/provider"
 	"Fisher-Mapper/internal/webhook"
 )

@@ -13,7 +13,7 @@ import (
 	"log/slog"
 	"time"
 
-	"Fisher-Mapper/internal/apperror"
+	"Fisher-Mapper/internal/domain/apperror"
 	"Fisher-Mapper/internal/provider"
 	"Fisher-Mapper/internal/webhook"
 )

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"Fisher-Mapper/internal/apperror"
+	"Fisher-Mapper/internal/domain/apperror"
 )
 
 func TestTransition_ValidMoves(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"sort"
 	"sync"
 
-	"Fisher-Mapper/internal/apperror"
+	"Fisher-Mapper/internal/domain/apperror"
 )
 
 // Registry holds explicitly registered providers by name.

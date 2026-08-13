@@ -3,7 +3,7 @@ package payment
 import (
 	"time"
 
-	"Fisher-Mapper/internal/apperror"
+	"Fisher-Mapper/internal/domain/apperror"
 )
 
 // Status is the payment's explicit state machine value. Locked in by plan

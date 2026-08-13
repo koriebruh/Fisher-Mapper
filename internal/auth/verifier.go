@@ -7,7 +7,7 @@ import (
 	"encoding/hex"
 	"time"
 
-	"Fisher-Mapper/internal/apperror"
+	"Fisher-Mapper/internal/domain/apperror"
 )
 
 // DedupChecker reports whether a (provider, providerEventID) pair has

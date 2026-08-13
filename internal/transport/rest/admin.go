@@ -3,8 +3,8 @@ package rest
 import (
 	"github.com/gofiber/fiber/v2"
 
-	"Fisher-Mapper/internal/apperror"
 	"Fisher-Mapper/internal/config"
+	"Fisher-Mapper/internal/domain/apperror"
 )
 
 // AdminDeps are the dependencies the Fase 4 admin config endpoints need.

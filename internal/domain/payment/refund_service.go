@@ -10,7 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"Fisher-Mapper/internal/apperror"
+	"Fisher-Mapper/internal/domain/apperror"
 	"Fisher-Mapper/internal/idempotency"
 	"Fisher-Mapper/internal/outbox"
 	"Fisher-Mapper/internal/provider"
