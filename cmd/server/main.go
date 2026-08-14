@@ -221,6 +221,11 @@ func run_() error {
 
 	// 6. Transport: single fiber app with health + payment + webhook +
 	// admin-config endpoints.
+	// rateLimitEnabled is checked live (not a boot-time snapshot) by both
+	// this REST app and the gRPC interceptor below, so PUT /admin/config
+	// can flip ratelimit.enabled without a redeploy.
+	rateLimitEnabled := func() bool { return dynamicCache.RateLimitEnabled(dynSeed.RateLimitEnabled) }
+
 	app := rest.NewApp(rest.Deps{
 		Pool:               pool,
 		QueueClient:        queueClient,
@@ -229,6 +234,7 @@ func run_() error {
 		Verifiers:          verifiers,
 		WebhookStore:       webhookStore,
 		RateLimiter:        limiter,
+		RateLimitEnabled:   rateLimitEnabled,
 		DynamicConfigStore: dynamicStore,
 		DynamicConfigCache: dynamicCache,
 		AdminAPIKey:        adminAPIKey,
@@ -257,7 +263,7 @@ func run_() error {
 		// Same *ratelimit.Limiter instance the fiber payment group's
 		// middleware uses (see rest.NewApp) -- gRPC is not a way around
 		// REST's rate limiting.
-		grpc.UnaryInterceptor(grpctransport.RateLimitInterceptor(limiter)),
+		grpc.UnaryInterceptor(grpctransport.RateLimitInterceptor(limiter, rateLimitEnabled)),
 	)
 	paymentv1.RegisterPaymentServiceServer(grpcServer, grpctransport.NewServer(paymentService))
 	// grpcurl (used for manual/validation testing) needs either the .proto

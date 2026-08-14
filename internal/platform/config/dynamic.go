@@ -131,41 +131,59 @@ func ProviderEnabledKey(providerName string) string {
 	return "provider." + providerName + ".enabled"
 }
 
-// app_config keys for the queue-name and OTel-toggle dynamic config values.
-// Mirrored by the seed INSERTs in 00006_dynamic_config_seeds.sql and by
-// DynamicSeed's defaults below -- three places, one literal each, kept in
-// sync by convention (same pattern already used for provider.mock.enabled
-// in 00004_app_config.sql).
+// app_config keys for the dynamic-config values seeded from config.toml.
+// Mirrored by the seed INSERTs in 00006_dynamic_config_seeds.sql /
+// 00007_toggle_seeds.sql and by DynamicSeed's defaults below -- kept in sync
+// by convention (same pattern already used for provider.mock.enabled in
+// 00004_app_config.sql).
 const (
-	QueueDefaultNameKey    = "queue.default_name"
-	ObservabilityOtelKey   = "observability.otel_enabled"
-	DefaultQueueName       = "default"
-	DefaultObservabilityOn = true
+	QueueDefaultNameKey      = "queue.default_name"
+	ObservabilityOtelKey     = "observability.otel_enabled"
+	RateLimitEnabledKey      = "ratelimit.enabled"
+	CircuitBreakerEnabledKey = "circuitbreaker.enabled"
+	ReconciliationEnabledKey = "reconciliation.enabled"
+	DefaultQueueName         = "default"
+	DefaultObservabilityOn   = true
+	DefaultRateLimitEnabled  = true
+	DefaultCircuitBreakerOn  = true
+	DefaultReconciliationOn  = true
 )
 
-// DynamicSeed holds the config.toml [queue]/[observability] values that seed
-// the two app_config keys above. Unlike every other dynamic-config value,
-// these two seeds are ALSO read directly from config.toml at process boot
-// (LoadDynamicSeed), not only baked into the migration -- because the OTel
-// tracer must be created before Postgres connects (see
-// bootstrap.RegisterObservability), so there is no Cache to read from yet at
-// that point in startup. This is a deliberate, narrow exception to "dynamic
-// config never comes from config.toml at runtime": once Postgres is
-// reachable, main.go reconciles the tracer against the live app_config row,
-// which then governs (including changes via the admin endpoint) without
-// requiring a restart. The queue name has no such pre-DB reader -- it is
-// only ever consumed via Cache, same as ProviderEnabled.
+// DynamicSeed holds the config.toml values that seed the app_config keys
+// above. Every field here is ALSO read directly from config.toml at process
+// boot (LoadDynamicSeed), not only baked into the migration, so it can serve
+// as the GetString/GetBool fallback default passed to the matching Cache
+// getter (Cache.QueueName, Cache.OtelEnabled, ...) -- the fallback an
+// operator gets on a fresh app_config table before the seed migration's
+// INSERT has even run, or if a row is later cleared. OtelEnabled additionally
+// MUST be read this way (not only via Cache) because the OTel tracer is
+// created before Postgres connects (see bootstrap.RegisterObservability) --
+// there is no Cache to read from yet at that point in startup; once
+// Postgres is reachable, main.go reconciles the tracer against the live
+// app_config row, which then governs (including changes via the admin
+// endpoint) without requiring a restart. The other fields have no such
+// pre-DB reader -- they are only ever consumed via Cache, same as
+// ProviderEnabled.
 type DynamicSeed struct {
-	QueueDefaultName string
-	OtelEnabled      bool
+	QueueDefaultName      string
+	OtelEnabled           bool
+	RateLimitEnabled      bool
+	CircuitBreakerEnabled bool
+	ReconciliationEnabled bool
 }
 
-// LoadDynamicSeed reads the [queue]/[observability] sections of config.toml,
-// falling back to DefaultQueueName/DefaultObservabilityOn for anything
-// missing or if path does not exist -- same missing-file tolerance as
-// bootstrap Load.
+// LoadDynamicSeed reads the [queue]/[observability]/[ratelimit]/
+// [circuitbreaker]/[reconciliation] sections of config.toml, falling back to
+// the Default* constants for anything missing or if path does not exist --
+// same missing-file tolerance as bootstrap Load.
 func LoadDynamicSeed(path string) (DynamicSeed, error) {
-	seed := DynamicSeed{QueueDefaultName: DefaultQueueName, OtelEnabled: DefaultObservabilityOn}
+	seed := DynamicSeed{
+		QueueDefaultName:      DefaultQueueName,
+		OtelEnabled:           DefaultObservabilityOn,
+		RateLimitEnabled:      DefaultRateLimitEnabled,
+		CircuitBreakerEnabled: DefaultCircuitBreakerOn,
+		ReconciliationEnabled: DefaultReconciliationOn,
+	}
 	if path == "" {
 		return seed, nil
 	}
@@ -183,6 +201,15 @@ func LoadDynamicSeed(path string) (DynamicSeed, error) {
 		Observability struct {
 			OtelEnabled *bool `toml:"otel_enabled"`
 		} `toml:"observability"`
+		RateLimit struct {
+			Enabled *bool `toml:"enabled"`
+		} `toml:"ratelimit"`
+		CircuitBreaker struct {
+			Enabled *bool `toml:"enabled"`
+		} `toml:"circuitbreaker"`
+		Reconciliation struct {
+			Enabled *bool `toml:"enabled"`
+		} `toml:"reconciliation"`
 	}
 	if _, err := toml.DecodeFile(path, &fc); err != nil {
 		return seed, fmt.Errorf("config: dynamic seed: decode %s: %w", path, err)
@@ -192,6 +219,15 @@ func LoadDynamicSeed(path string) (DynamicSeed, error) {
 	}
 	if fc.Observability.OtelEnabled != nil {
 		seed.OtelEnabled = *fc.Observability.OtelEnabled
+	}
+	if fc.RateLimit.Enabled != nil {
+		seed.RateLimitEnabled = *fc.RateLimit.Enabled
+	}
+	if fc.CircuitBreaker.Enabled != nil {
+		seed.CircuitBreakerEnabled = *fc.CircuitBreaker.Enabled
+	}
+	if fc.Reconciliation.Enabled != nil {
+		seed.ReconciliationEnabled = *fc.Reconciliation.Enabled
 	}
 	return seed, nil
 }
@@ -346,4 +382,30 @@ func (c *Cache) QueueName(seedDefault string) string {
 // falling back to seedDefault if no row exists yet.
 func (c *Cache) OtelEnabled(seedDefault bool) bool {
 	return c.GetBool(ObservabilityOtelKey, seedDefault)
+}
+
+// RateLimitEnabled returns the live app_config value for the rate-limit
+// on/off toggle, falling back to seedDefault if no row exists yet. Checked
+// per-request (REST middleware, gRPC interceptor) rather than once at
+// process boot, so an operator can flip it without a redeploy.
+func (c *Cache) RateLimitEnabled(seedDefault bool) bool {
+	return c.GetBool(RateLimitEnabledKey, seedDefault)
+}
+
+// CircuitBreakerEnabled returns the live app_config value for the circuit
+// breaker on/off toggle, falling back to seedDefault if no row exists yet.
+// false bypasses the breaker check entirely (calls reach the provider
+// regardless of trip state) -- useful against a sandbox PJP that
+// intentionally simulates failures, where a real breaker would just get in
+// the way.
+func (c *Cache) CircuitBreakerEnabled(seedDefault bool) bool {
+	return c.GetBool(CircuitBreakerEnabledKey, seedDefault)
+}
+
+// ReconciliationEnabled returns the live app_config value for the
+// reconciliation-job on/off toggle, falling back to seedDefault if no row
+// exists yet. false pauses the job (e.g. during a maintenance window)
+// without stopping the rest of the worker process.
+func (c *Cache) ReconciliationEnabled(seedDefault bool) bool {
+	return c.GetBool(ReconciliationEnabledKey, seedDefault)
 }

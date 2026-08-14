@@ -34,8 +34,14 @@ import (
 // client that reconnects, even though a single long-lived grpc.ClientConn
 // (as used by grpcurl and this template's own test client) would appear to
 // work correctly under that broken keying.
-func RateLimitInterceptor(l *ratelimit.Limiter) grpc.UnaryServerInterceptor {
+// enabled is checked on every RPC (not just once at construction) so the
+// dynamic-config ratelimit.enabled toggle can flip behavior without a
+// redeploy; nil means "always enabled".
+func RateLimitInterceptor(l *ratelimit.Limiter, enabled func() bool) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if enabled != nil && !enabled() {
+			return handler(ctx, req)
+		}
 		key := rateLimitKey(ctx)
 		if key != "" && !l.Allow(key) {
 			return nil, status.Error(codes.ResourceExhausted, "too many requests")

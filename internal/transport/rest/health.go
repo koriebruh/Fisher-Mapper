@@ -30,13 +30,17 @@ import (
 // backing the /admin/config surface — DynamicConfigStore nil disables that
 // surface entirely (e.g. in tests that don't need it).
 type Deps struct {
-	Pool               *pgxpool.Pool
-	QueueClient        *asynq.Client
-	PaymentService     *payment.Service
-	Providers          *provider.Registry
-	Verifiers          map[string]auth.Verifier
-	WebhookStore       *webhook.Store
-	RateLimiter        *ratelimit.Limiter
+	Pool           *pgxpool.Pool
+	QueueClient    *asynq.Client
+	PaymentService *payment.Service
+	Providers      *provider.Registry
+	Verifiers      map[string]auth.Verifier
+	WebhookStore   *webhook.Store
+	RateLimiter    *ratelimit.Limiter
+	// RateLimitEnabled is the dynamic-config ratelimit.enabled toggle,
+	// checked live on every request -- nil means "always enabled" (same
+	// default as RateLimiter being nil disabling the middleware entirely).
+	RateLimitEnabled   func() bool
 	DynamicConfigStore *config.DynamicStore
 	DynamicConfigCache *config.Cache
 	AdminAPIKey        string
@@ -78,7 +82,7 @@ func NewApp(deps Deps) *fiber.App {
 	if deps.PaymentService != nil {
 		paymentGroup := app.Group("/payments")
 		if deps.RateLimiter != nil {
-			paymentGroup.Use(ratelimit.Middleware(deps.RateLimiter, nil))
+			paymentGroup.Use(ratelimit.Middleware(deps.RateLimiter, nil, deps.RateLimitEnabled))
 		}
 		RegisterPaymentRoutes(paymentGroup, PaymentDeps{Service: deps.PaymentService})
 		RegisterRefundRoutes(paymentGroup, PaymentDeps{Service: deps.PaymentService})

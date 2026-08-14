@@ -85,12 +85,19 @@ func APIKeyOrIP(c *fiber.Ctx) string {
 }
 
 // Middleware builds a fiber.Handler that rejects requests exceeding l's
-// rate with 429, keyed by keyFunc (APIKeyOrIP if nil).
-func Middleware(l *Limiter, keyFunc KeyFunc) fiber.Handler {
+// rate with 429, keyed by keyFunc (APIKeyOrIP if nil). enabled is checked on
+// every request (not just once at construction) so the dynamic-config
+// ratelimit.enabled toggle can flip behavior without a redeploy; nil means
+// "always enabled" (backward compatible with callers that don't wire a
+// toggle at all).
+func Middleware(l *Limiter, keyFunc KeyFunc, enabled func() bool) fiber.Handler {
 	if keyFunc == nil {
 		keyFunc = APIKeyOrIP
 	}
 	return func(c *fiber.Ctx) error {
+		if enabled != nil && !enabled() {
+			return c.Next()
+		}
 		key := keyFunc(c)
 		if key == "" {
 			key = c.IP()

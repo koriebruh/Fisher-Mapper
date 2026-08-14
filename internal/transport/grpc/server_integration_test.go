@@ -330,7 +330,7 @@ func TestGRPC_RateLimitInterceptor_Rejects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(RateLimitInterceptor(limiter)))
+	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(RateLimitInterceptor(limiter, nil)))
 	pb.RegisterPaymentServiceServer(grpcServer, stubPaymentServer{})
 	go func() { _ = grpcServer.Serve(lis) }()
 	t.Cleanup(grpcServer.Stop)
@@ -358,5 +358,39 @@ func TestGRPC_RateLimitInterceptor_Rejects(t *testing.T) {
 	}
 	if st.Code() != codes.ResourceExhausted {
 		t.Errorf("second call code = %v, want %v", st.Code(), codes.ResourceExhausted)
+	}
+}
+
+// TestGRPC_RateLimitInterceptor_EnabledFalseBypassesLimiter proves the
+// ratelimit.enabled dynamic-config toggle actually changes behavior: the
+// exact same 1-token-burst Limiter that rejects a second call in the
+// previous test lets an unbounded number of calls through once enabled
+// reports false, since the interceptor short-circuits before ever touching
+// the limiter.
+func TestGRPC_RateLimitInterceptor_EnabledFalseBypassesLimiter(t *testing.T) {
+	limiter := ratelimit.New(1, 1)
+	disabled := func() bool { return false }
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(RateLimitInterceptor(limiter, disabled)))
+	pb.RegisterPaymentServiceServer(grpcServer, stubPaymentServer{})
+	go func() { _ = grpcServer.Serve(lis) }()
+	t.Cleanup(grpcServer.Stop)
+
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	client := pb.NewPaymentServiceClient(conn)
+
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		if _, err := client.GetPayment(ctx, &pb.GetPaymentRequest{PaymentId: uuid.NewString()}); err != nil {
+			t.Fatalf("call %d: want no error with ratelimit disabled, got: %v", i, err)
+		}
 	}
 }
