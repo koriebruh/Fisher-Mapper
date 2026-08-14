@@ -123,11 +123,12 @@ func (s *Service) ProcessCharge(ctx context.Context, in ChargeTaskInput) error {
 	}
 
 	err = s.repo.ApplyTransition(ctx, TransitionParams{
-		PaymentID: in.PaymentID,
-		To:        StatusProcessing,
-		EventTS:   s.now(),
-		EventType: "processing_started",
-		Provider:  in.Provider,
+		PaymentID:   in.PaymentID,
+		To:          StatusProcessing,
+		EventTS:     s.now(),
+		EventType:   "processing_started",
+		Provider:    in.Provider,
+		InitiatedBy: InitiatedBySystem,
 	})
 	if err != nil {
 		switch apperror.CodeOf(err) {
@@ -214,6 +215,7 @@ func (s *Service) ProcessCharge(ctx context.Context, in ChargeTaskInput) error {
 			EventType:   "charge_" + string(target),
 			Provider:    in.Provider,
 			ProviderRef: providerRefPtr,
+			InitiatedBy: InitiatedBySystem,
 		}); err != nil {
 			return fmt.Errorf("process charge: apply result: %w", err)
 		}

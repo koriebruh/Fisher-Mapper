@@ -362,6 +362,11 @@ func (s *Service) ApplyProviderEvent(ctx context.Context, providerName string, e
 		Provider:        providerName,
 		ProviderEventID: eventID,
 		RawPayload:      evt.RawPayload,
+		// A webhook callback is the PJP calling us, not the customer acting
+		// directly against this template's own API -- "system" per
+		// InitiatedBy's taxonomy, same as every other worker-driven
+		// transition today.
+		InitiatedBy: InitiatedBySystem,
 	})
 }
 

@@ -173,17 +173,26 @@ func (r *PGRepository) CreateWithOutbox(ctx context.Context, p *Payment, withTx 
 	return nil
 }
 
-func (r *PGRepository) Get(ctx context.Context, id uuid.UUID) (*Payment, error) {
-	const selectSQL = `
-		SELECT id, tenant_id, livemode, currency, amount, operation_type, provider,
-		       provider_ref, status, last_event_at, created_at, updated_at
-		FROM payments WHERE id = $1`
+// paymentSelectColumns/paymentScanDest are shared by every read path
+// (Get/FindByProviderRef/ListProcessingOlderThan) so the envelope columns
+// can't drift out of sync between one query's SELECT list and another's.
+const paymentSelectColumns = `id, tenant_id, livemode, currency, amount, operation_type, provider,
+		       provider_ref, status, last_event_at, created_at, updated_at,
+		       source_app, channel, trace_id, description, initiated_by, request_ip, request_user_agent`
 
-	p := &Payment{}
-	err := r.pool.QueryRow(ctx, selectSQL, id).Scan(
+func paymentScanDest(p *Payment) []any {
+	return []any{
 		&p.ID, &p.TenantID, &p.Livemode, &p.Currency, &p.Amount, &p.OperationType, &p.Provider,
 		&p.ProviderRef, &p.Status, &p.LastEventAt, &p.CreatedAt, &p.UpdatedAt,
-	)
+		&p.SourceApp, &p.Channel, &p.TraceID, &p.Description, &p.InitiatedBy, &p.RequestIP, &p.RequestUserAgent,
+	}
+}
+
+func (r *PGRepository) Get(ctx context.Context, id uuid.UUID) (*Payment, error) {
+	selectSQL := `SELECT ` + paymentSelectColumns + ` FROM payments WHERE id = $1`
+
+	p := &Payment{}
+	err := r.pool.QueryRow(ctx, selectSQL, id).Scan(paymentScanDest(p)...)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, apperror.New(apperror.CodeNotFound, "payment: not found")
@@ -194,16 +203,10 @@ func (r *PGRepository) Get(ctx context.Context, id uuid.UUID) (*Payment, error) 
 }
 
 func (r *PGRepository) FindByProviderRef(ctx context.Context, provider, providerRef string) (*Payment, error) {
-	const selectSQL = `
-		SELECT id, tenant_id, livemode, currency, amount, operation_type, provider,
-		       provider_ref, status, last_event_at, created_at, updated_at
-		FROM payments WHERE provider = $1 AND provider_ref = $2`
+	selectSQL := `SELECT ` + paymentSelectColumns + ` FROM payments WHERE provider = $1 AND provider_ref = $2`
 
 	p := &Payment{}
-	err := r.pool.QueryRow(ctx, selectSQL, provider, providerRef).Scan(
-		&p.ID, &p.TenantID, &p.Livemode, &p.Currency, &p.Amount, &p.OperationType, &p.Provider,
-		&p.ProviderRef, &p.Status, &p.LastEventAt, &p.CreatedAt, &p.UpdatedAt,
-	)
+	err := r.pool.QueryRow(ctx, selectSQL, provider, providerRef).Scan(paymentScanDest(p)...)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, apperror.New(apperror.CodeNotFound, "payment: not found for provider ref")
@@ -255,10 +258,10 @@ func (r *PGRepository) ApplyTransition(ctx context.Context, params TransitionPar
 	}
 
 	const insertEventSQL = `
-		INSERT INTO payment_events (payment_id, event_type, provider, provider_event_id, provider_event_ts, raw_payload)
-		VALUES ($1, $2, $3, $4, $5, $6)`
+		INSERT INTO payment_events (payment_id, event_type, provider, provider_event_id, provider_event_ts, raw_payload, initiated_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`
 	if _, err := tx.Exec(ctx, insertEventSQL,
-		params.PaymentID, params.EventType, params.Provider, params.ProviderEventID, params.EventTS, params.RawPayload,
+		params.PaymentID, params.EventType, params.Provider, params.ProviderEventID, params.EventTS, params.RawPayload, params.InitiatedBy,
 	); err != nil {
 		return fmt.Errorf("payment: apply transition: insert event: %w", err)
 	}
@@ -282,9 +285,7 @@ func (r *PGRepository) SetProviderRef(ctx context.Context, id uuid.UUID, provide
 }
 
 func (r *PGRepository) ListProcessingOlderThan(ctx context.Context, cutoff time.Time) ([]*Payment, error) {
-	const selectSQL = `
-		SELECT id, tenant_id, livemode, currency, amount, operation_type, provider,
-		       provider_ref, status, last_event_at, created_at, updated_at
+	selectSQL := `SELECT ` + paymentSelectColumns + `
 		FROM payments
 		WHERE status = 'processing' AND last_event_at < $1
 		ORDER BY last_event_at`
@@ -298,10 +299,7 @@ func (r *PGRepository) ListProcessingOlderThan(ctx context.Context, cutoff time.
 	var out []*Payment
 	for rows.Next() {
 		p := &Payment{}
-		if err := rows.Scan(
-			&p.ID, &p.TenantID, &p.Livemode, &p.Currency, &p.Amount, &p.OperationType, &p.Provider,
-			&p.ProviderRef, &p.Status, &p.LastEventAt, &p.CreatedAt, &p.UpdatedAt,
-		); err != nil {
+		if err := rows.Scan(paymentScanDest(p)...); err != nil {
 			return nil, fmt.Errorf("payment: list processing older than: scan: %w", err)
 		}
 		out = append(out, p)

@@ -115,11 +115,12 @@ func (s *Service) ReconcilePayment(ctx context.Context, p *Payment) error {
 	}
 
 	if err := s.repo.ApplyTransition(ctx, TransitionParams{
-		PaymentID: fresh.ID,
-		To:        target,
-		EventTS:   s.now(),
-		EventType: "reconciliation_" + string(target),
-		Provider:  fresh.Provider,
+		PaymentID:   fresh.ID,
+		To:          target,
+		EventTS:     s.now(),
+		EventType:   "reconciliation_" + string(target),
+		Provider:    fresh.Provider,
+		InitiatedBy: InitiatedBySystem,
 	}); err != nil {
 		switch apperror.CodeOf(err) {
 		case apperror.CodeInvalidTransition, apperror.CodeTerminalState, apperror.CodeStaleEvent:
