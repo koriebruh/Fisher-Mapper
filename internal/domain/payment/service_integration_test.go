@@ -16,6 +16,7 @@ import (
 	"Fisher-Mapper/internal/provider"
 	"Fisher-Mapper/internal/provider/mock"
 	"Fisher-Mapper/internal/resilience/bulkhead"
+	"Fisher-Mapper/internal/resilience/circuitbreaker"
 )
 
 // These tests exercise the real Postgres-backed Repository + idempotency
@@ -660,5 +661,90 @@ func TestService_ProcessCharge_Bulkhead_SlowProviderDoesNotStarveFastProvider(t 
 	}
 	if got := slowProv.CallCounts().Charge; got != slowCount {
 		t.Errorf("slow provider Charge calls = %d, want %d", got, slowCount)
+	}
+}
+
+// TestService_ProcessCharge_CircuitBreakerOpen_SkipsProviderCall pins down
+// the pre-toggle behavior this test file must keep working: an open breaker
+// makes ProcessCharge skip the provider call, leaving the payment stuck
+// "processing" for reconciliation to resolve later.
+func TestService_ProcessCharge_CircuitBreakerOpen_SkipsProviderCall(t *testing.T) {
+	pool := testPool(t)
+	mockProv := mock.New(mock.Config{Name: "mock"})
+	repo := NewPGRepository(pool)
+	idemStore := idempotency.NewPGStore(pool)
+
+	// threshold=1, cooldown=1h -- one RecordFailure trips it open and it
+	// stays open for the duration of this test.
+	breakers := circuitbreaker.NewRegistry(1, time.Hour)
+	breakers.Get("mock").RecordFailure()
+
+	svc := NewService(repo, idemStore, singleProviderRegistry{mockProv}).WithCircuitBreakers(breakers)
+
+	tenantID := uuid.NewString()
+	key := uuid.NewString()
+	raw := bodyFor(tenantID, 500)
+	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 500, Provider: "mock"}
+	out, err := svc.CreatePayment(context.Background(), in, key, raw)
+	if err != nil {
+		t.Fatalf("CreatePayment: %v", err)
+	}
+
+	if err := svc.ProcessCharge(context.Background(), chargeInputFor(out.PaymentID, key, in)); err != nil {
+		t.Fatalf("ProcessCharge: %v", err)
+	}
+
+	if got := mockProv.CallCounts().Charge; got != 0 {
+		t.Errorf("provider Charge called %d times with breaker open, want 0", got)
+	}
+	p, err := repo.Get(context.Background(), out.PaymentID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if p.Status != StatusProcessing {
+		t.Errorf("payment status with breaker open = %s, want processing (provider call skipped)", p.Status)
+	}
+}
+
+// TestService_ProcessCharge_CircuitBreakerDisabled_BypassesOpenBreaker
+// proves the circuitbreaker.enabled=false toggle actually changes behavior:
+// the SAME open breaker that made the previous test skip the provider call
+// must NOT stop ProcessCharge once WithCircuitBreakerEnabledCheck reports
+// false -- the call reaches the provider and the payment resolves normally.
+func TestService_ProcessCharge_CircuitBreakerDisabled_BypassesOpenBreaker(t *testing.T) {
+	pool := testPool(t)
+	mockProv := mock.New(mock.Config{Name: "mock"})
+	repo := NewPGRepository(pool)
+	idemStore := idempotency.NewPGStore(pool)
+
+	breakers := circuitbreaker.NewRegistry(1, time.Hour)
+	breakers.Get("mock").RecordFailure() // open, same as the test above
+
+	svc := NewService(repo, idemStore, singleProviderRegistry{mockProv}).
+		WithCircuitBreakers(breakers).
+		WithCircuitBreakerEnabledCheck(func() bool { return false })
+
+	tenantID := uuid.NewString()
+	key := uuid.NewString()
+	raw := bodyFor(tenantID, 500)
+	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 500, Provider: "mock"}
+	out, err := svc.CreatePayment(context.Background(), in, key, raw)
+	if err != nil {
+		t.Fatalf("CreatePayment: %v", err)
+	}
+
+	if err := svc.ProcessCharge(context.Background(), chargeInputFor(out.PaymentID, key, in)); err != nil {
+		t.Fatalf("ProcessCharge: %v", err)
+	}
+
+	if got := mockProv.CallCounts().Charge; got != 1 {
+		t.Errorf("provider Charge called %d times with breaker disabled, want 1 (breaker bypassed)", got)
+	}
+	p, err := repo.Get(context.Background(), out.PaymentID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if p.Status != StatusSucceeded {
+		t.Errorf("payment status with breaker disabled = %s, want succeeded (call went through)", p.Status)
 	}
 }

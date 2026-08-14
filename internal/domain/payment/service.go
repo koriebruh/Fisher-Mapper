@@ -95,6 +95,15 @@ type Service struct {
 	// never sets this, and does not need to -- it never calls a provider).
 	providerEnabled func(providerName string) bool
 
+	// circuitBreakerEnabled is the dynamic-config circuitbreaker.enabled
+	// check, injected the same plain-func way as providerEnabled. nil (or a
+	// func returning true) means "breaker checks apply as normal"; false
+	// makes breakerFor report no breaker at all, so ProcessCharge/
+	// ProcessRefund reach the provider regardless of trip state -- useful
+	// against a sandbox PJP that intentionally simulates failures, where a
+	// tripped breaker would just get in the way of testing.
+	circuitBreakerEnabled func() bool
+
 	// onReconciliationMismatch is the Fase 5 reconciliation-mismatch-count
 	// metric hook, injected the same way (a plain func, not an
 	// internal/platform/observability import) for the identical reason: the
@@ -148,6 +157,14 @@ func (s *Service) WithBulkhead(limiter *bulkhead.Limiter) *Service {
 // DB round-trip happens per payment/refund). Returns s for chaining.
 func (s *Service) WithProviderEnabledCheck(fn func(providerName string) bool) *Service {
 	s.providerEnabled = fn
+	return s
+}
+
+// WithCircuitBreakerEnabledCheck wires the dynamic-config
+// circuitbreaker.enabled flag check into breakerFor (see its doc). Returns
+// s for chaining.
+func (s *Service) WithCircuitBreakerEnabledCheck(fn func() bool) *Service {
+	s.circuitBreakerEnabled = fn
 	return s
 }
 

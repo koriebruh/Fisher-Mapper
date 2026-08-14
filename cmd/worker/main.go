@@ -205,7 +205,8 @@ func run_() error {
 		WithWebhookStaging(webhookStore).
 		WithCircuitBreakers(breakers).
 		WithBulkhead(bulkheadLimiter).
-		WithProviderEnabledCheck(dynamicCache.ProviderEnabled)
+		WithProviderEnabledCheck(dynamicCache.ProviderEnabled).
+		WithCircuitBreakerEnabledCheck(func() bool { return dynamicCache.CircuitBreakerEnabled(dynSeed.CircuitBreakerEnabled) })
 	if metrics != nil {
 		// Fase 5 reconciliation-mismatch counter -- see
 		// internal/domain/payment/reconcile.go's onReconciliationMismatch call site.
@@ -284,7 +285,8 @@ func run_() error {
 	// reconciliationStuckThreshold and sweeps staged webhook events with no
 	// matching payment yet. See internal/messaging/reconciliation and
 	// internal/domain/payment/reconcile.go.
-	reconciler := reconciliation.New(paymentService, reconciliationPollInterval, reconciliationStuckThreshold)
+	reconciler := reconciliation.New(paymentService, reconciliationPollInterval, reconciliationStuckThreshold).
+		WithEnabledCheck(func() bool { return dynamicCache.ReconciliationEnabled(dynSeed.ReconciliationEnabled) })
 
 	asynqServer := asynq.NewServer(
 		asynq.RedisClientOpt{Addr: cfg.Redis.Addr},

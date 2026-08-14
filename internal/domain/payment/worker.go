@@ -242,6 +242,12 @@ func (s *Service) breakerFor(providerName string) breakerLike {
 	if s.breakers == nil {
 		return nil
 	}
+	if s.circuitBreakerEnabled != nil && !s.circuitBreakerEnabled() {
+		// Toggle flipped off: treat as "no breaker wired" -- the caller's
+		// nil-check skips the Allow()/RecordSuccess()/RecordFailure() calls
+		// entirely, so the provider call proceeds regardless of trip state.
+		return nil
+	}
 	return s.breakers.Get(providerName)
 }
 
