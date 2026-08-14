@@ -42,6 +42,28 @@ func NewServer(service *payment.Service) *Server {
 //
 // idempotency_key is excluded, matching REST: there, the key travels in an
 // HTTP header and is never part of the hashed body.
+//
+// CreatePaymentInput/CreateRefundInput/CreatePayoutInput's embedded Envelope
+// is deliberately INCLUDED here (via a plain json.Marshal of the whole
+// input struct) rather than stripped out before hashing: SourceApp/
+// Description are caller-supplied business fields, and REST's fingerprint
+// (a hash of the raw request body) already includes them when a client
+// sends them, by construction. Excluding them from gRPC's fingerprint would
+// make the two transports inconsistent -- a same-key-different-description
+// retry would 409 on REST but silently replay the old response on gRPC.
+// Channel/InitiatedBy are hashed too, but are compile-time constants per
+// transport (buildEnvelope) and so never vary between retries of the same
+// logical call; TraceID/RequestIP/RequestUserAgent are always nil at this
+// point (see CreatePayment/CreateRefund/CreatePayout's call order --
+// populateRequestContext runs strictly AFTER fingerprintBasis) for the same
+// reason. Net effect: adding Envelope to these input structs DID change the
+// hashed byte sequence's shape one time, as of this change -- any
+// idempotency_keys row a gRPC caller created before this deploy will not
+// match a retry with the same key after it (falls to CodeIdempotencyConflict
+// rather than a replay). Accepted as a one-time migration cost on a
+// template with no live production traffic; a real deployment carrying live
+// in-flight idempotency keys across this exact change would need a
+// dual-read migration window instead.
 func fingerprintBasis(v any) ([]byte, error) {
 	return json.Marshal(v)
 }
