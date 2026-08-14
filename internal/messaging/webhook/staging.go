@@ -188,18 +188,23 @@ func Join(
 	for _, e := range events {
 		evt, perr := parse(ctx, e.Payload)
 		if perr != nil {
-			slog.Error("webhook join: parse staged payload failed", "error", perr, "staged_id", e.ID)
+			// perr is the raw error from the Provider's ParseWebhook (never
+			// itself an *apperror.Error) -- wrap as CodeProviderError so
+			// apperror.LogAttr classifies a malformed/undecodable PJP payload
+			// as SourceProvider, not SourceInternal.
+			wrapped := apperror.Wrap(apperror.CodeProviderError, "webhook join: parse staged payload failed", perr)
+			slog.Error("webhook join: parse staged payload failed", "error", perr, "staged_id", e.ID, apperror.LogAttr(wrapped))
 			continue
 		}
 
 		aerr := apply(ctx, providerName, evt)
 		if !benignApplyOutcome(aerr) {
-			slog.Error("webhook join: apply failed, will retry on next join", "error", aerr, "staged_id", e.ID)
+			slog.Error("webhook join: apply failed, will retry on next join", "error", aerr, "staged_id", e.ID, apperror.LogAttr(aerr))
 			continue
 		}
 
 		if merr := store.MarkProcessed(ctx, e.ID, paymentID); merr != nil {
-			slog.Error("webhook join: mark processed failed", "error", merr, "staged_id", e.ID)
+			slog.Error("webhook join: mark processed failed", "error", merr, "staged_id", e.ID, apperror.LogAttr(merr))
 			continue
 		}
 		resolved++

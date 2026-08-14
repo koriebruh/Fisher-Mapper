@@ -151,7 +151,8 @@ func (s *Service) ProcessCharge(ctx context.Context, in ChargeTaskInput) error {
 	// comment on payments stuck "processing" with no provider_ref), same
 	// category as the circuit-breaker-open skip immediately below.
 	if !s.isProviderEnabled(in.Provider) {
-		slog.Error("process charge: provider disabled between CAS and provider call, payment stuck processing with no provider_ref", "provider", in.Provider, "payment_id", in.PaymentID)
+		slog.Error("process charge: provider disabled between CAS and provider call, payment stuck processing with no provider_ref",
+			"source", apperror.SourceInternal, "provider", in.Provider, "payment_id", in.PaymentID)
 		return nil
 	}
 
@@ -160,7 +161,8 @@ func (s *Service) ProcessCharge(ctx context.Context, in ChargeTaskInput) error {
 		// Circuit open for this provider: skip the call rather than pile
 		// onto a provider that's already failing. Same resting state as a
 		// timeout -- "processing", resolved later by reconciliation.
-		slog.Warn("process charge: circuit breaker open, skipping provider call", "provider", in.Provider, "payment_id", in.PaymentID)
+		slog.Warn("process charge: circuit breaker open, skipping provider call",
+			"source", apperror.SourceInternal, "provider", in.Provider, "payment_id", in.PaymentID)
 		return nil
 	}
 
@@ -233,7 +235,7 @@ func (s *Service) ProcessCharge(ctx context.Context, in ChargeTaskInput) error {
 			return prov.ParseWebhook(ctx, provider.ParseWebhookRequest{Body: payload})
 		}
 		if _, jerr := webhook.Join(ctx, s.staging, parse, s.ApplyProviderEvent, in.Provider, chargeResp.ProviderRef, in.PaymentID); jerr != nil {
-			slog.Error("process charge: webhook join failed", "error", jerr, "payment_id", in.PaymentID)
+			slog.Error("process charge: webhook join failed", "error", jerr, "payment_id", in.PaymentID, apperror.LogAttr(jerr))
 		}
 	}
 

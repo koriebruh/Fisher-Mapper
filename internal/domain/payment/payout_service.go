@@ -260,8 +260,14 @@ func (s *Service) ProcessPayout(ctx context.Context, in PayoutTaskInput) error {
 		if breaker != nil {
 			breaker.RecordFailure()
 		}
+		// payoutErr is whatever the Provider implementation returned raw
+		// (never itself an *apperror.Error) -- wrap it as CodeProviderError
+		// purely so LogAttr classifies it correctly as SourceProvider rather
+		// than falling through CodeOf's CodeInternal default, which would
+		// mislabel a PJP failure as a bug in this codebase.
+		wrapped := apperror.Wrap(apperror.CodeProviderError, "process payout: provider call failed", payoutErr)
 		slog.Warn("process payout: provider call failed, no auto-retry, staying processing",
-			"layer", "worker", "source", apperror.SourceProvider, "provider", in.Provider, "payout_id", in.PayoutID, "error", payoutErr)
+			"layer", "worker", "provider", in.Provider, "payout_id", in.PayoutID, "error", payoutErr, apperror.LogAttr(wrapped))
 		// See method doc: never retried, payout stays "processing".
 		return nil
 	}

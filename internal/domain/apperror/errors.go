@@ -8,6 +8,7 @@ package apperror
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 )
 
 // Code identifies a category of error. Kept as a small, stable, string enum
@@ -193,4 +194,15 @@ func SourceOf(code Code) Source {
 		return src
 	}
 	return SourceInternal
+}
+
+// LogAttr returns a "source" slog.Attr classifying err via CodeOf+SourceOf,
+// so every log call site attaches this the same way instead of each one
+// re-typing the classification by hand (and risking drift when a Code's
+// entry in sourceByCode changes but a call site's copy-pasted literal
+// doesn't). Works on any error, not just *Error -- a plain wrapped error
+// falls through CodeOf's CodeInternal default to SourceInternal, matching
+// CodeOf's own documented fallback.
+func LogAttr(err error) slog.Attr {
+	return slog.String("source", string(SourceOf(CodeOf(err))))
 }

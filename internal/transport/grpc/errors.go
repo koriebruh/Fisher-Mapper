@@ -72,7 +72,7 @@ func statusFromError(err error) error {
 
 	message := err.Error()
 	if grpcCode == codes.Internal {
-		slog.Error("grpc request failed", "error", err, "code", code)
+		slog.Error("grpc request failed", "error", err, "code", code, apperror.LogAttr(err))
 		message = "internal error"
 	}
 

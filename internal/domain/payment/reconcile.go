@@ -68,7 +68,7 @@ func (s *Service) ReconcilePayment(ctx context.Context, p *Payment) error {
 			return prov.ParseWebhook(ctx, provider.ParseWebhookRequest{Body: payload})
 		}
 		if _, jerr := webhook.Join(ctx, s.staging, parse, s.ApplyProviderEvent, p.Provider, *p.ProviderRef, p.ID); jerr != nil {
-			slog.Error("reconcile payment: webhook join failed", "error", jerr, "payment_id", p.ID)
+			slog.Error("reconcile payment: webhook join failed", "error", jerr, "payment_id", p.ID, apperror.LogAttr(jerr))
 		}
 	}
 
@@ -81,13 +81,18 @@ func (s *Service) ReconcilePayment(ctx context.Context, p *Payment) error {
 		return nil
 	}
 	if fresh.ProviderRef == nil {
-		slog.Warn("reconcile payment: stuck processing with no provider_ref, cannot query GetStatus (known gap)", "payment_id", p.ID)
+		slog.Warn("reconcile payment: stuck processing with no provider_ref, cannot query GetStatus (known gap)",
+			"source", apperror.SourceInternal, "payment_id", p.ID)
 		return nil
 	}
 
 	statusResp, err := prov.GetStatus(ctx, provider.GetStatusRequest{ProviderRef: *fresh.ProviderRef})
 	if err != nil {
-		slog.Warn("reconcile payment: GetStatus failed, will retry next cycle", "error", err, "payment_id", p.ID)
+		// err is the raw error from the Provider's GetStatus (never itself an
+		// *apperror.Error) -- wrap as CodeProviderError so LogAttr classifies
+		// it as SourceProvider, not SourceInternal.
+		wrapped := apperror.Wrap(apperror.CodeProviderError, "reconcile payment: GetStatus failed", err)
+		slog.Warn("reconcile payment: GetStatus failed, will retry next cycle", "error", err, "payment_id", p.ID, apperror.LogAttr(wrapped))
 		return nil
 	}
 
@@ -105,7 +110,7 @@ func (s *Service) ReconcilePayment(ctx context.Context, p *Payment) error {
 
 	if statusResp.Amount != fresh.Amount || statusResp.Currency != fresh.Currency {
 		slog.Error("reconciliation mismatch: GetStatus amount/currency does not match stored payment, refusing to apply",
-			"payment_id", p.ID,
+			"source", apperror.SourceProvider, "payment_id", p.ID,
 			"stored_amount", fresh.Amount, "stored_currency", fresh.Currency,
 			"provider_amount", statusResp.Amount, "provider_currency", statusResp.Currency)
 		if s.onReconciliationMismatch != nil {
@@ -180,14 +185,18 @@ func (s *Service) ReconcilePayout(ctx context.Context, p *Payout) error {
 	}
 	if fresh.ProviderRef == nil {
 		slog.Warn("reconcile payout: stuck processing with no provider_ref, cannot query GetStatus (known gap)",
-			"layer", "reconciliation", "payout_id", p.ID)
+			"layer", "reconciliation", "source", apperror.SourceInternal, "payout_id", p.ID)
 		return nil
 	}
 
 	statusResp, err := prov.GetStatus(ctx, provider.GetStatusRequest{ProviderRef: *fresh.ProviderRef})
 	if err != nil {
+		// err is the raw error from the Provider's GetStatus (never itself an
+		// *apperror.Error) -- wrap as CodeProviderError so LogAttr classifies
+		// it as SourceProvider, not SourceInternal.
+		wrapped := apperror.Wrap(apperror.CodeProviderError, "reconcile payout: GetStatus failed", err)
 		slog.Warn("reconcile payout: GetStatus failed, will retry next cycle",
-			"layer", "reconciliation", "source", apperror.SourceProvider, "error", err, "payout_id", p.ID)
+			"layer", "reconciliation", "error", err, "payout_id", p.ID, apperror.LogAttr(wrapped))
 		return nil
 	}
 
@@ -203,7 +212,7 @@ func (s *Service) ReconcilePayout(ctx context.Context, p *Payout) error {
 
 	if statusResp.Amount != fresh.Amount || statusResp.Currency != fresh.Currency {
 		slog.Error("reconciliation mismatch: GetStatus amount/currency does not match stored payout, refusing to apply",
-			"layer", "reconciliation", "payout_id", p.ID,
+			"layer", "reconciliation", "source", apperror.SourceProvider, "payout_id", p.ID,
 			"stored_amount", fresh.Amount, "stored_currency", fresh.Currency,
 			"provider_amount", statusResp.Amount, "provider_currency", statusResp.Currency)
 		if s.onReconciliationMismatch != nil {
@@ -257,20 +266,20 @@ func (s *Service) SweepStagedWebhooks(ctx context.Context) (int, error) {
 				// next sweep.
 				continue
 			}
-			slog.Error("sweep staged webhooks: find by provider ref", "error", err, "provider", pair.Provider, "provider_ref", pair.ProviderRef)
+			slog.Error("sweep staged webhooks: find by provider ref", "error", err, "provider", pair.Provider, "provider_ref", pair.ProviderRef, apperror.LogAttr(err))
 			continue
 		}
 
 		prov, err := s.providers.Get(pair.Provider)
 		if err != nil {
-			slog.Error("sweep staged webhooks: provider lookup", "error", err, "provider", pair.Provider)
+			slog.Error("sweep staged webhooks: provider lookup", "error", err, "provider", pair.Provider, apperror.LogAttr(err))
 			continue
 		}
 		parse := func(ctx context.Context, payload []byte) (provider.WebhookEvent, error) {
 			return prov.ParseWebhook(ctx, provider.ParseWebhookRequest{Body: payload})
 		}
 		if _, jerr := webhook.Join(ctx, s.staging, parse, s.ApplyProviderEvent, pair.Provider, pair.ProviderRef, p.ID); jerr != nil {
-			slog.Error("sweep staged webhooks: join failed", "error", jerr, "provider", pair.Provider, "provider_ref", pair.ProviderRef)
+			slog.Error("sweep staged webhooks: join failed", "error", jerr, "provider", pair.Provider, "provider_ref", pair.ProviderRef, apperror.LogAttr(jerr))
 			continue
 		}
 		matched++

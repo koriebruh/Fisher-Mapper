@@ -240,13 +240,15 @@ func (s *Service) ProcessRefund(ctx context.Context, in RefundTaskInput) error {
 	}
 
 	if !s.isProviderEnabled(in.Provider) {
-		slog.Error("process refund: provider disabled between CAS and provider call, refund stuck processing", "provider", in.Provider, "refund_id", in.RefundID)
+		slog.Error("process refund: provider disabled between CAS and provider call, refund stuck processing",
+			"source", apperror.SourceInternal, "provider", in.Provider, "refund_id", in.RefundID)
 		return nil
 	}
 
 	breaker := s.breakerFor(in.Provider)
 	if breaker != nil && !breaker.Allow() {
-		slog.Warn("process refund: circuit breaker open, skipping provider call", "provider", in.Provider, "refund_id", in.RefundID)
+		slog.Warn("process refund: circuit breaker open, skipping provider call",
+			"source", apperror.SourceInternal, "provider", in.Provider, "refund_id", in.RefundID)
 		return nil
 	}
 
