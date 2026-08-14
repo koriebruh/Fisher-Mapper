@@ -218,13 +218,53 @@ func TestCache_OtelEnabled_RowOverridesSeedDefault(t *testing.T) {
 	}
 }
 
+func TestCache_RateLimitEnabled_RowOverridesSeedDefault(t *testing.T) {
+	src := &fakeConfigSource{values: map[string]string{RateLimitEnabledKey: "false"}}
+	c := NewCache(src, time.Hour)
+	if err := c.Load(context.Background()); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.RateLimitEnabled(true) {
+		t.Error("RateLimitEnabled = true, want the app_config row (false) to override the seed default (true)")
+	}
+}
+
+func TestCache_CircuitBreakerEnabled_RowOverridesSeedDefault(t *testing.T) {
+	src := &fakeConfigSource{values: map[string]string{CircuitBreakerEnabledKey: "false"}}
+	c := NewCache(src, time.Hour)
+	if err := c.Load(context.Background()); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.CircuitBreakerEnabled(true) {
+		t.Error("CircuitBreakerEnabled = true, want the app_config row (false) to override the seed default (true)")
+	}
+}
+
+func TestCache_ReconciliationEnabled_RowOverridesSeedDefault(t *testing.T) {
+	src := &fakeConfigSource{values: map[string]string{ReconciliationEnabledKey: "false"}}
+	c := NewCache(src, time.Hour)
+	if err := c.Load(context.Background()); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.ReconciliationEnabled(true) {
+		t.Error("ReconciliationEnabled = true, want the app_config row (false) to override the seed default (true)")
+	}
+}
+
 func TestLoadDynamicSeed_MissingFileUsesHardcodedDefaults(t *testing.T) {
 	seed, err := LoadDynamicSeed("/nonexistent/config.toml")
 	if err != nil {
 		t.Fatalf("LoadDynamicSeed: %v", err)
 	}
-	if seed.QueueDefaultName != DefaultQueueName || seed.OtelEnabled != DefaultObservabilityOn {
-		t.Errorf("LoadDynamicSeed on missing file = %+v, want hardcoded defaults", seed)
+	want := DynamicSeed{
+		QueueDefaultName:      DefaultQueueName,
+		OtelEnabled:           DefaultObservabilityOn,
+		RateLimitEnabled:      DefaultRateLimitEnabled,
+		CircuitBreakerEnabled: DefaultCircuitBreakerOn,
+		ReconciliationEnabled: DefaultReconciliationOn,
+	}
+	if seed != want {
+		t.Errorf("LoadDynamicSeed on missing file = %+v, want hardcoded defaults %+v", seed, want)
 	}
 }
 
@@ -235,16 +275,29 @@ default_name = "payments"
 
 [observability]
 otel_enabled = false
+
+[ratelimit]
+enabled = false
+
+[circuitbreaker]
+enabled = false
+
+[reconciliation]
+enabled = false
 `)
 
 	seed, err := LoadDynamicSeed(path)
 	if err != nil {
 		t.Fatalf("LoadDynamicSeed: %v", err)
 	}
-	if seed.QueueDefaultName != "payments" {
-		t.Errorf("QueueDefaultName = %q, want %q", seed.QueueDefaultName, "payments")
+	want := DynamicSeed{
+		QueueDefaultName:      "payments",
+		OtelEnabled:           false,
+		RateLimitEnabled:      false,
+		CircuitBreakerEnabled: false,
+		ReconciliationEnabled: false,
 	}
-	if seed.OtelEnabled {
-		t.Error("OtelEnabled = true, want false per file")
+	if seed != want {
+		t.Errorf("LoadDynamicSeed = %+v, want %+v (every section overridden by the file)", seed, want)
 	}
 }
