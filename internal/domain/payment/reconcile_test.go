@@ -33,7 +33,7 @@ func TestService_ReconcilePayment_ResolvesViaGetStatus_AmountCurrencyMatch(t *te
 	tenantID := uuid.NewString()
 	key := uuid.NewString()
 	raw := bodyFor(tenantID, 750)
-	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 750, Provider: "mock"}
+	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 750, Provider: "mock", Envelope: testEnvelope}
 	out, err := svc.CreatePayment(context.Background(), in, key, raw)
 	if err != nil {
 		t.Fatalf("CreatePayment: %v", err)
@@ -81,7 +81,7 @@ func TestService_ReconcilePayment_AmountMismatch_NeverAutoSucceeds(t *testing.T)
 	tenantID := uuid.NewString()
 	key := uuid.NewString()
 	raw := bodyFor(tenantID, 900)
-	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 900, Provider: "mock"}
+	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 900, Provider: "mock", Envelope: testEnvelope}
 	out, err := svc.CreatePayment(context.Background(), in, key, raw)
 	if err != nil {
 		t.Fatalf("CreatePayment: %v", err)
@@ -132,7 +132,7 @@ func TestService_ReconcilePayment_JoinsStagedWebhookBeforeTrustingGetStatus(t *t
 	tenantID := uuid.NewString()
 	key := uuid.NewString()
 	raw := bodyFor(tenantID, 650)
-	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 650, Provider: "mock"}
+	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 650, Provider: "mock", Envelope: testEnvelope}
 	out, err := svc.CreatePayment(context.Background(), in, key, raw)
 	if err != nil {
 		t.Fatalf("CreatePayment: %v", err)
@@ -190,7 +190,7 @@ func TestService_ListStuckProcessing_OnlyReturnsPaymentsOlderThanThreshold(t *te
 	tenantID := uuid.NewString()
 	key := uuid.NewString()
 	raw := bodyFor(tenantID, 400)
-	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 400, Provider: "mock"}
+	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 400, Provider: "mock", Envelope: testEnvelope}
 	out, err := svc.CreatePayment(context.Background(), in, key, raw)
 	if err != nil {
 		t.Fatalf("CreatePayment: %v", err)

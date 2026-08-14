@@ -29,7 +29,7 @@ func TestService_CreatePayout_ReturnsPendingAndEnqueuesOutbox(t *testing.T) {
 	tenantID := uuid.NewString()
 	key := uuid.NewString()
 	raw := payoutBodyFor(tenantID, 1000)
-	in := CreatePayoutInput{TenantID: tenantID, Currency: "USD", Amount: 1000, Provider: "mock", Destination: "bank_acct_test"}
+	in := CreatePayoutInput{TenantID: tenantID, Currency: "USD", Amount: 1000, Provider: "mock", Destination: "bank_acct_test", Envelope: testEnvelope}
 
 	out, err := svc.CreatePayout(context.Background(), in, key, raw)
 	if err != nil {
@@ -69,12 +69,12 @@ func TestService_CreatePayout_SameKeyAsChargeScope_DoesNotCollide(t *testing.T) 
 	sharedKey := uuid.NewString()
 
 	tenantID := uuid.NewString()
-	chargeIn := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 500, Provider: "mock"}
+	chargeIn := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 500, Provider: "mock", Envelope: testEnvelope}
 	if _, err := svc.CreatePayment(context.Background(), chargeIn, sharedKey, bodyFor(tenantID, 500)); err != nil {
 		t.Fatalf("CreatePayment: %v", err)
 	}
 
-	payoutIn := CreatePayoutInput{TenantID: tenantID, Currency: "USD", Amount: 500, Provider: "mock", Destination: "bank_acct_test"}
+	payoutIn := CreatePayoutInput{TenantID: tenantID, Currency: "USD", Amount: 500, Provider: "mock", Destination: "bank_acct_test", Envelope: testEnvelope}
 	out, err := svc.CreatePayout(context.Background(), payoutIn, sharedKey, payoutBodyFor(tenantID, 500))
 	if err != nil {
 		t.Fatalf("CreatePayout with a key already used by a charge: %v, want it to succeed in its own scope", err)
@@ -95,7 +95,7 @@ func TestService_ProcessPayout_ConcurrentRedelivery_PayoutCalledOnce(t *testing.
 	tenantID := uuid.NewString()
 	key := uuid.NewString()
 	raw := payoutBodyFor(tenantID, 700)
-	in := CreatePayoutInput{TenantID: tenantID, Currency: "USD", Amount: 700, Provider: "mock", Destination: "bank_acct_test"}
+	in := CreatePayoutInput{TenantID: tenantID, Currency: "USD", Amount: 700, Provider: "mock", Destination: "bank_acct_test", Envelope: testEnvelope}
 
 	out, err := svc.CreatePayout(context.Background(), in, key, raw)
 	if err != nil {
@@ -151,7 +151,7 @@ func TestService_ProcessPayout_ProviderError_NoRetry_StaysProcessing(t *testing.
 	tenantID := uuid.NewString()
 	key := uuid.NewString()
 	raw := payoutBodyFor(tenantID, 900)
-	in := CreatePayoutInput{TenantID: tenantID, Currency: "USD", Amount: 900, Provider: "mock", Destination: "bank_acct_test"}
+	in := CreatePayoutInput{TenantID: tenantID, Currency: "USD", Amount: 900, Provider: "mock", Destination: "bank_acct_test", Envelope: testEnvelope}
 
 	out, err := svc.CreatePayout(context.Background(), in, key, raw)
 	if err != nil {
@@ -197,7 +197,7 @@ func TestService_ProcessPayout_ProviderDisabled_RejectedBeforeCAS(t *testing.T) 
 	tenantID := uuid.NewString()
 	key := uuid.NewString()
 	raw := payoutBodyFor(tenantID, 200)
-	in := CreatePayoutInput{TenantID: tenantID, Currency: "USD", Amount: 200, Provider: "mock", Destination: "bank_acct_test"}
+	in := CreatePayoutInput{TenantID: tenantID, Currency: "USD", Amount: 200, Provider: "mock", Destination: "bank_acct_test", Envelope: testEnvelope}
 
 	out, err := svc.CreatePayout(context.Background(), in, key, raw)
 	if err != nil {

@@ -28,7 +28,7 @@ func createSucceededPayment(t *testing.T, svc *Service, amount int64) uuid.UUID 
 	tenantID := uuid.NewString()
 	key := uuid.NewString()
 	raw := bodyFor(tenantID, amount)
-	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: amount, Provider: "mock"}
+	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: amount, Provider: "mock", Envelope: testEnvelope}
 
 	out, err := svc.CreatePayment(context.Background(), in, key, raw)
 	if err != nil {
@@ -55,7 +55,7 @@ func TestService_CreateRefund_SucceedsAndEnqueuesOutbox(t *testing.T) {
 	key := uuid.NewString()
 	raw := refundBodyFor(400)
 	out, err := svc.CreateRefund(context.Background(), CreateRefundInput{
-		PaymentID: paymentID, TenantID: uuid.NewString(), Amount: 400,
+		PaymentID: paymentID, TenantID: uuid.NewString(), Amount: 400, Envelope: testEnvelope,
 	}, key, raw)
 	if err != nil {
 		t.Fatalf("CreateRefund: %v", err)
@@ -89,7 +89,7 @@ func TestService_CreateRefund_RejectsWhenPaymentNotSucceeded(t *testing.T) {
 	tenantID := uuid.NewString()
 	key := uuid.NewString()
 	raw := bodyFor(tenantID, 500)
-	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 500, Provider: "mock"}
+	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 500, Provider: "mock", Envelope: testEnvelope}
 	out, err := svc.CreatePayment(context.Background(), in, key, raw)
 	if err != nil {
 		t.Fatalf("CreatePayment: %v", err)
@@ -97,7 +97,7 @@ func TestService_CreateRefund_RejectsWhenPaymentNotSucceeded(t *testing.T) {
 	// Deliberately do NOT call ProcessCharge -- payment stays "pending".
 
 	_, err = svc.CreateRefund(context.Background(), CreateRefundInput{
-		PaymentID: out.PaymentID, TenantID: uuid.NewString(), Amount: 100,
+		PaymentID: out.PaymentID, TenantID: uuid.NewString(), Amount: 100, Envelope: testEnvelope,
 	}, uuid.NewString(), refundBodyFor(100))
 	if err == nil {
 		t.Fatal("CreateRefund against a non-succeeded payment = nil error, want rejection")
@@ -123,7 +123,7 @@ func TestService_CreateRefund_SumExceedsOriginal_Rejected(t *testing.T) {
 
 	firstKey := uuid.NewString()
 	firstOut, err := svc.CreateRefund(context.Background(), CreateRefundInput{
-		PaymentID: paymentID, TenantID: uuid.NewString(), Amount: 600,
+		PaymentID: paymentID, TenantID: uuid.NewString(), Amount: 600, Envelope: testEnvelope,
 	}, firstKey, refundBodyFor(600))
 	if err != nil {
 		t.Fatalf("first CreateRefund (600): %v", err)
@@ -141,7 +141,7 @@ func TestService_CreateRefund_SumExceedsOriginal_Rejected(t *testing.T) {
 	}
 
 	_, err = svc.CreateRefund(context.Background(), CreateRefundInput{
-		PaymentID: paymentID, TenantID: uuid.NewString(), Amount: 500,
+		PaymentID: paymentID, TenantID: uuid.NewString(), Amount: 500, Envelope: testEnvelope,
 	}, uuid.NewString(), refundBodyFor(500))
 	if err == nil {
 		t.Fatal("second CreateRefund (500, total 1100 > original 1000) = nil error, want rejection")
@@ -152,7 +152,7 @@ func TestService_CreateRefund_SumExceedsOriginal_Rejected(t *testing.T) {
 
 	// A refund that exactly fills the remaining 400 must still be allowed.
 	okOut, err := svc.CreateRefund(context.Background(), CreateRefundInput{
-		PaymentID: paymentID, TenantID: uuid.NewString(), Amount: 400,
+		PaymentID: paymentID, TenantID: uuid.NewString(), Amount: 400, Envelope: testEnvelope,
 	}, uuid.NewString(), refundBodyFor(400))
 	if err != nil {
 		t.Fatalf("CreateRefund for exactly the remaining amount (400): %v", err)
@@ -185,7 +185,7 @@ func TestService_CreateRefund_ConcurrentOverlappingRefunds_SumNeverExceeds(t *te
 		go func(i int) {
 			defer wg.Done()
 			_, errs[i] = svc.CreateRefund(context.Background(), CreateRefundInput{
-				PaymentID: paymentID, TenantID: uuid.NewString(), Amount: perRefund,
+				PaymentID: paymentID, TenantID: uuid.NewString(), Amount: perRefund, Envelope: testEnvelope,
 			}, uuid.NewString(), refundBodyFor(int64(1000+i))) // distinct fingerprints
 		}(i)
 	}
@@ -236,7 +236,7 @@ func TestService_ProcessRefund_ConcurrentRedelivery_RefundCalledOnce(t *testing.
 	paymentID := createSucceededPayment(t, svc, 800)
 	key := uuid.NewString()
 	out, err := svc.CreateRefund(context.Background(), CreateRefundInput{
-		PaymentID: paymentID, TenantID: uuid.NewString(), Amount: 300,
+		PaymentID: paymentID, TenantID: uuid.NewString(), Amount: 300, Envelope: testEnvelope,
 	}, key, refundBodyFor(300))
 	if err != nil {
 		t.Fatalf("CreateRefund: %v", err)
@@ -290,7 +290,7 @@ func TestService_ProcessRefund_ProviderDisabled_RejectedBeforeCAS(t *testing.T) 
 	paymentID := createSucceededPayment(t, setupSvc, 500)
 	key := uuid.NewString()
 	out, err := setupSvc.CreateRefund(context.Background(), CreateRefundInput{
-		PaymentID: paymentID, TenantID: uuid.NewString(), Amount: 200,
+		PaymentID: paymentID, TenantID: uuid.NewString(), Amount: 200, Envelope: testEnvelope,
 	}, key, refundBodyFor(200))
 	if err != nil {
 		t.Fatalf("CreateRefund: %v", err)

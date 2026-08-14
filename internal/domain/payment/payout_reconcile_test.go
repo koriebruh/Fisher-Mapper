@@ -19,7 +19,7 @@ func createProcessingPayout(t *testing.T, svc *Service, amount int64) *Payout {
 	t.Helper()
 	tenantID := uuid.NewString()
 	key := uuid.NewString()
-	in := CreatePayoutInput{TenantID: tenantID, Currency: "USD", Amount: amount, Provider: "mock", Destination: "bank_acct_test"}
+	in := CreatePayoutInput{TenantID: tenantID, Currency: "USD", Amount: amount, Provider: "mock", Destination: "bank_acct_test", Envelope: testEnvelope}
 
 	out, err := svc.CreatePayout(context.Background(), in, key, payoutBodyFor(tenantID, amount))
 	if err != nil {

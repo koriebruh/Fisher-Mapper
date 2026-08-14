@@ -38,9 +38,12 @@ func testPool(t *testing.T) *pgxpool.Pool {
 func insertTestPayment(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID
+	// channel/initiated_by are NOT NULL with no default (migration 00009) --
+	// "test"/"customer" here are just enough to satisfy the constraints,
+	// this table's envelope columns aren't under test in this package.
 	const insertSQL = `
-		INSERT INTO payments (tenant_id, livemode, currency, amount, operation_type, provider, status)
-		VALUES ($1, false, 'USD', 100, 'charge', 'mock', 'pending')
+		INSERT INTO payments (tenant_id, livemode, currency, amount, operation_type, provider, status, channel, initiated_by)
+		VALUES ($1, false, 'USD', 100, 'charge', 'mock', 'pending', 'test', 'customer')
 		RETURNING id`
 	if err := pool.QueryRow(context.Background(), insertSQL, uuid.NewString()).Scan(&id); err != nil {
 		t.Fatalf("insert test payment: %v", err)

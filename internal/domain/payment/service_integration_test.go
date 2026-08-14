@@ -50,6 +50,17 @@ func testPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
+// testEnvelope is the minimal valid Envelope every test in this package
+// that constructs a Create*Input directly must set -- these tests call
+// Service.CreatePayment/CreateRefund/CreatePayout without going through the
+// REST/gRPC transport that would normally populate Envelope, but channel is
+// NOT NULL with no default and initiated_by has a NOT NULL CHECK constraint
+// (migration 00009), so a zero-value Envelope fails at INSERT, not at
+// compile time. "test" is not one of the real ChannelREST/ChannelGRPC
+// values on purpose -- it should never be mistaken for real transport
+// traffic if it ever leaked into a shared database.
+var testEnvelope = Envelope{Channel: "test", InitiatedBy: InitiatedByCustomer}
+
 // singleProviderRegistry satisfies the service's providerRegistry
 // interface with one fixed provider, regardless of the requested name --
 // enough for these tests, which only ever use "mock".
@@ -116,7 +127,7 @@ func TestService_CreatePayment_ReturnsPendingAndEnqueuesOutbox(t *testing.T) {
 	tenantID := uuid.NewString()
 	key := uuid.NewString()
 	raw := bodyFor(tenantID, 1000)
-	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 1000, Provider: "mock"}
+	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 1000, Provider: "mock", Envelope: testEnvelope}
 
 	out, err := svc.CreatePayment(context.Background(), in, key, raw)
 	if err != nil {
@@ -159,7 +170,7 @@ func TestService_ReplayOnSameKeySameBody(t *testing.T) {
 	tenantID := uuid.NewString()
 	key := uuid.NewString()
 	raw := bodyFor(tenantID, 1000)
-	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 1000, Provider: "mock"}
+	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 1000, Provider: "mock", Envelope: testEnvelope}
 
 	first, err := svc.CreatePayment(context.Background(), in, key, raw)
 	if err != nil {
@@ -216,13 +227,13 @@ func TestService_ConflictOnSameKeyDifferentBody(t *testing.T) {
 	key := uuid.NewString()
 
 	rawA := bodyFor(tenantID, 1000)
-	inA := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 1000, Provider: "mock"}
+	inA := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 1000, Provider: "mock", Envelope: testEnvelope}
 	if _, err := svc.CreatePayment(context.Background(), inA, key, rawA); err != nil {
 		t.Fatalf("first CreatePayment: %v", err)
 	}
 
 	rawB := bodyFor(tenantID, 2000) // different amount -> different fingerprint
-	inB := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 2000, Provider: "mock"}
+	inB := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 2000, Provider: "mock", Envelope: testEnvelope}
 	_, err := svc.CreatePayment(context.Background(), inB, key, rawB)
 	if err == nil {
 		t.Fatal("CreatePayment with same key, different body = nil error, want conflict")
@@ -249,7 +260,7 @@ func TestService_ConcurrentCreatePaymentSameKey_OnlyOneReservationWins(t *testin
 	tenantID := uuid.NewString()
 	key := uuid.NewString()
 	raw := bodyFor(tenantID, 500)
-	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 500, Provider: "mock"}
+	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 500, Provider: "mock", Envelope: testEnvelope}
 
 	const n = 8
 	var wg sync.WaitGroup
@@ -318,7 +329,7 @@ func TestService_ProcessCharge_ConcurrentRedelivery_ChargeCalledOnce(t *testing.
 	tenantID := uuid.NewString()
 	key := uuid.NewString()
 	raw := bodyFor(tenantID, 700)
-	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 700, Provider: "mock"}
+	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 700, Provider: "mock", Envelope: testEnvelope}
 
 	out, err := svc.CreatePayment(context.Background(), in, key, raw)
 	if err != nil {
@@ -374,7 +385,7 @@ func TestService_ProcessCharge_ConcurrentRedeliveryWithLatency_ChargeCalledOnce(
 	tenantID := uuid.NewString()
 	key := uuid.NewString()
 	raw := bodyFor(tenantID, 650)
-	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 650, Provider: "mock"}
+	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 650, Provider: "mock", Envelope: testEnvelope}
 
 	out, err := svc.CreatePayment(context.Background(), in, key, raw)
 	if err != nil {
@@ -423,7 +434,7 @@ func TestService_ProcessCharge_ProviderTimeout_NoRetry_StaysProcessing(t *testin
 	tenantID := uuid.NewString()
 	key := uuid.NewString()
 	raw := bodyFor(tenantID, 900)
-	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 900, Provider: "mock"}
+	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 900, Provider: "mock", Envelope: testEnvelope}
 
 	out, err := svc.CreatePayment(context.Background(), in, key, raw)
 	if err != nil {
@@ -478,7 +489,7 @@ func TestService_ApplyProviderEvent_TerminalStateRejectsOlderEvent(t *testing.T)
 	tenantID := uuid.NewString()
 	key := uuid.NewString()
 	raw := bodyFor(tenantID, 750)
-	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 750, Provider: "mock"}
+	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 750, Provider: "mock", Envelope: testEnvelope}
 
 	out, err := svc.CreatePayment(context.Background(), in, key, raw)
 	if err != nil {
@@ -536,7 +547,7 @@ func TestService_ApplyProviderEvent_DuplicateProviderEventIDDropped(t *testing.T
 	tenantID := uuid.NewString()
 	key := uuid.NewString()
 	raw := bodyFor(tenantID, 300)
-	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 300, Provider: "mock"}
+	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 300, Provider: "mock", Envelope: testEnvelope}
 
 	out, err := svc.CreatePayment(context.Background(), in, key, raw)
 	if err != nil {
@@ -613,7 +624,7 @@ func TestService_ProcessCharge_Bulkhead_SlowProviderDoesNotStarveFastProvider(t 
 		tenantID := uuid.NewString()
 		key := uuid.NewString()
 		raw := bodyFor(tenantID, 100)
-		in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 100, Provider: "slow"}
+		in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 100, Provider: "slow", Envelope: testEnvelope}
 		out, err := svc.CreatePayment(context.Background(), in, key, raw)
 		if err != nil {
 			t.Fatalf("CreatePayment (slow #%d): %v", i, err)
@@ -639,7 +650,7 @@ func TestService_ProcessCharge_Bulkhead_SlowProviderDoesNotStarveFastProvider(t 
 	fastTenantID := uuid.NewString()
 	fastKey := uuid.NewString()
 	fastRaw := bodyFor(fastTenantID, 200)
-	fastIn := CreatePaymentInput{TenantID: fastTenantID, Currency: "USD", Amount: 200, Provider: "fast"}
+	fastIn := CreatePaymentInput{TenantID: fastTenantID, Currency: "USD", Amount: 200, Provider: "fast", Envelope: testEnvelope}
 	fastOut, err := svc.CreatePayment(context.Background(), fastIn, fastKey, fastRaw)
 	if err != nil {
 		t.Fatalf("CreatePayment (fast): %v", err)
@@ -684,7 +695,7 @@ func TestService_ProcessCharge_CircuitBreakerOpen_SkipsProviderCall(t *testing.T
 	tenantID := uuid.NewString()
 	key := uuid.NewString()
 	raw := bodyFor(tenantID, 500)
-	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 500, Provider: "mock"}
+	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 500, Provider: "mock", Envelope: testEnvelope}
 	out, err := svc.CreatePayment(context.Background(), in, key, raw)
 	if err != nil {
 		t.Fatalf("CreatePayment: %v", err)
@@ -727,7 +738,7 @@ func TestService_ProcessCharge_CircuitBreakerDisabled_BypassesOpenBreaker(t *tes
 	tenantID := uuid.NewString()
 	key := uuid.NewString()
 	raw := bodyFor(tenantID, 500)
-	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 500, Provider: "mock"}
+	in := CreatePaymentInput{TenantID: tenantID, Currency: "USD", Amount: 500, Provider: "mock", Envelope: testEnvelope}
 	out, err := svc.CreatePayment(context.Background(), in, key, raw)
 	if err != nil {
 		t.Fatalf("CreatePayment: %v", err)
