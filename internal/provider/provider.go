@@ -42,7 +42,11 @@ type AuthorizeRequest struct {
 	Amount         int64
 	Currency       string
 	PaymentMethod  string
-	Metadata       map[string]string
+	// Metadata is opaque merchant key/value data (order id, memo, ...) and,
+	// for a real PJP integration, the natural home for a provider-issued
+	// tokenized-card reference (e.g. "card_token": "tok_..."). It must never
+	// hold raw PAN/CVV/track data -- see the Provider interface doc comment.
+	Metadata map[string]string
 }
 
 type AuthorizeResponse struct {
@@ -176,6 +180,14 @@ type WebhookEvent struct {
 // break (`var _ provider.Provider = (*Mock)(nil)` in mock.go is what would
 // have caught a real second implementation falling out of sync). See the
 // plan doc's addendum for the full reasoning.
+// PCI-DSS scope note: no request/response type in this file carries a field
+// capable of holding raw PAN/CVV/track data. PaymentMethod is a category
+// string ("card"/"va"/"ewallet"), never card data itself -- a real PJP
+// integration collects/tokenizes the card client-side (PJP-hosted field or
+// SDK) and passes this template only the resulting opaque provider token
+// (via Metadata, see AuthorizeRequest.Metadata's doc comment), keeping raw
+// card data out of this codebase's request path, logs, and database
+// entirely.
 type Provider interface {
 	// Name identifies the provider (matches its registry key).
 	Name() string
