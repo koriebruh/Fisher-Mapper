@@ -34,7 +34,26 @@ type TransitionParams struct {
 	ProviderEventID *string
 
 	RawPayload []byte
+
+	// InitiatedBy is the per-TRANSITION actor (see Envelope.InitiatedBy's
+	// doc for the aggregate-level analogue): "system" for every worker/
+	// webhook/reconciliation-driven transition today, "admin" reserved for
+	// a future manual-retry endpoint. Every call site must set this
+	// explicitly (the migration drops the column's DEFAULT after backfill)
+	// -- callers should use InitiatedBySystem unless they are that future
+	// admin path.
+	InitiatedBy string
 }
+
+// InitiatedBySystem/InitiatedByCustomer/InitiatedByAdmin are the only valid
+// InitiatedBy values (CHECK constraint on payment_events/refund_events/
+// payout_events.initiated_by) -- defined as constants so call sites never
+// hand-type the string.
+const (
+	InitiatedByCustomer = "customer"
+	InitiatedBySystem   = "system"
+	InitiatedByAdmin    = "admin"
+)
 
 // Repository is the payment persistence interface. The pgx implementation
 // (PGRepository) is the only one that ships with Phase 2 — sqlc generation
@@ -106,14 +125,18 @@ func NewPGRepository(pool *pgxpool.Pool) *PGRepository {
 	return &PGRepository{pool: pool}
 }
 
+const paymentInsertColumns = `tenant_id, livemode, currency, amount, operation_type, provider, status,
+		    source_app, channel, trace_id, description, initiated_by, request_ip, request_user_agent`
+const paymentInsertPlaceholders = `$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14`
+
 func (r *PGRepository) Create(ctx context.Context, p *Payment) error {
-	const insertSQL = `
-		INSERT INTO payments (tenant_id, livemode, currency, amount, operation_type, provider, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	insertSQL := `INSERT INTO payments (` + paymentInsertColumns + `)
+		VALUES (` + paymentInsertPlaceholders + `)
 		RETURNING id, status, last_event_at, created_at, updated_at`
 
 	err := r.pool.QueryRow(ctx, insertSQL,
 		p.TenantID, p.Livemode, p.Currency, p.Amount, p.OperationType, p.Provider, StatusPending,
+		p.SourceApp, p.Channel, p.TraceID, p.Description, p.InitiatedBy, p.RequestIP, p.RequestUserAgent,
 	).Scan(&p.ID, &p.Status, &p.LastEventAt, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("payment: create: %w", err)
@@ -128,13 +151,13 @@ func (r *PGRepository) CreateWithOutbox(ctx context.Context, p *Payment, withTx 
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
 
-	const insertSQL = `
-		INSERT INTO payments (tenant_id, livemode, currency, amount, operation_type, provider, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	insertSQL := `INSERT INTO payments (` + paymentInsertColumns + `)
+		VALUES (` + paymentInsertPlaceholders + `)
 		RETURNING id, status, last_event_at, created_at, updated_at`
 
 	err = tx.QueryRow(ctx, insertSQL,
 		p.TenantID, p.Livemode, p.Currency, p.Amount, p.OperationType, p.Provider, StatusPending,
+		p.SourceApp, p.Channel, p.TraceID, p.Description, p.InitiatedBy, p.RequestIP, p.RequestUserAgent,
 	).Scan(&p.ID, &p.Status, &p.LastEventAt, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("payment: create with outbox: insert payment: %w", err)
