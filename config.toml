@@ -57,3 +57,10 @@ enabled = true # false bypasses the per-provider breaker so calls reach the prov
 
 [reconciliation]
 enabled = true # false pauses the reconciliation job (e.g. during a maintenance window) without stopping the rest of the worker process
+
+# No [webhook] verify-signature toggle here on purpose: a DB-flippable
+# bypass on a money endpoint would let anyone with admin-config access forge
+# a webhook straight to "succeeded" (internal/provider/auth.HMACVerifier is
+# fail-closed the same way RegisterVerifiers/adminAPIKey already are). For a
+# sandbox PJP that doesn't sign, omit that provider from
+# bootstrap.RegisterVerifiers' map instead (restart, not a live flip).
