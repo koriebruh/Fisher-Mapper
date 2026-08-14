@@ -55,6 +55,16 @@ const (
 	InitiatedByAdmin    = "admin"
 )
 
+// ChannelREST/ChannelGRPC are the only values a transport may set on
+// Envelope.Channel -- constants so a stray casing mismatch (e.g. "REST" vs
+// "rest") can never silently split a query filtering on this column (it has
+// no CHECK constraint, unlike initiated_by, precisely because the set of
+// transports is expected to grow).
+const (
+	ChannelREST = "rest"
+	ChannelGRPC = "grpc"
+)
+
 // Repository is the payment persistence interface. The pgx implementation
 // (PGRepository) is the only one that ships with Phase 2 — sqlc generation
 // was deliberately deferred (see plan report); every query here is

@@ -30,6 +30,12 @@ type CreatePayoutInput struct {
 	Provider    string
 	Destination string
 	Metadata    map[string]string
+
+	// Envelope mirrors CreatePaymentInput.Envelope's doc exactly -- see there
+	// for why RequestIP/RequestUserAgent/TraceID stay out of the gRPC
+	// fingerprint basis. Payout must carry the SAME envelope completeness as
+	// charge/refund, not a stripped-down version.
+	Envelope
 }
 
 // CreatePayoutOutput mirrors CreateRefundOutput: async by construction (same
@@ -127,6 +133,7 @@ func (s *Service) doCreatePayout(ctx context.Context, in CreatePayoutInput, idem
 		Amount:      in.Amount,
 		Provider:    in.Provider,
 		Destination: in.Destination,
+		Envelope:    in.Envelope,
 	}
 
 	taskInput := PayoutTaskInput{

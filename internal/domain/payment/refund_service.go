@@ -29,6 +29,11 @@ type CreateRefundInput struct {
 	Livemode  bool
 	Currency  string
 	Amount    int64
+
+	// Envelope mirrors CreatePaymentInput.Envelope's doc exactly -- see there
+	// for why RequestIP/RequestUserAgent/TraceID stay out of the gRPC
+	// fingerprint basis.
+	Envelope
 }
 
 // CreateRefundOutput mirrors CreatePaymentOutput: async by construction
@@ -139,6 +144,7 @@ func (s *Service) doCreateRefund(ctx context.Context, in CreateRefundInput, idem
 		Currency:      in.Currency,
 		Amount:        in.Amount,
 		OperationType: OperationRefund,
+		Envelope:      in.Envelope,
 	}
 
 	taskInput := RefundTaskInput{

@@ -36,6 +36,12 @@ type CreatePaymentRequest struct {
 	Provider      string            `protobuf:"bytes,6,opt,name=provider,proto3" json:"provider,omitempty"`
 	PaymentMethod string            `protobuf:"bytes,7,opt,name=payment_method,json=paymentMethod,proto3" json:"payment_method,omitempty"`
 	Metadata      map[string]string `protobuf:"bytes,8,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// source_app/description are the two caller-supplied Envelope fields —
+	// see payment.Envelope's doc. Both optional; an empty string is treated
+	// as "not set" (plain string, not proto3 `optional`, since that
+	// distinction has no meaning either field needs to make).
+	SourceApp     string `protobuf:"bytes,9,opt,name=source_app,json=sourceApp,proto3" json:"source_app,omitempty"`
+	Description   string `protobuf:"bytes,10,opt,name=description,proto3" json:"description,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -124,6 +130,20 @@ func (x *CreatePaymentRequest) GetMetadata() map[string]string {
 		return x.Metadata
 	}
 	return nil
+}
+
+func (x *CreatePaymentRequest) GetSourceApp() string {
+	if x != nil {
+		return x.SourceApp
+	}
+	return ""
+}
+
+func (x *CreatePaymentRequest) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
 }
 
 type CreatePaymentResponse struct {
@@ -256,8 +276,17 @@ type GetPaymentResponse struct {
 	Provider      string                 `protobuf:"bytes,7,opt,name=provider,proto3" json:"provider,omitempty"`
 	ProviderRef   string                 `protobuf:"bytes,8,opt,name=provider_ref,json=providerRef,proto3" json:"provider_ref,omitempty"`
 	Status        string                 `protobuf:"bytes,9,opt,name=status,proto3" json:"status,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Envelope fields (see payment.Envelope's doc), exposed verbatim —
+	// mirrors REST's paymentView.
+	SourceApp        string `protobuf:"bytes,10,opt,name=source_app,json=sourceApp,proto3" json:"source_app,omitempty"`
+	Channel          string `protobuf:"bytes,11,opt,name=channel,proto3" json:"channel,omitempty"`
+	TraceId          string `protobuf:"bytes,12,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
+	Description      string `protobuf:"bytes,13,opt,name=description,proto3" json:"description,omitempty"`
+	InitiatedBy      string `protobuf:"bytes,14,opt,name=initiated_by,json=initiatedBy,proto3" json:"initiated_by,omitempty"`
+	RequestIp        string `protobuf:"bytes,15,opt,name=request_ip,json=requestIp,proto3" json:"request_ip,omitempty"`
+	RequestUserAgent string `protobuf:"bytes,16,opt,name=request_user_agent,json=requestUserAgent,proto3" json:"request_user_agent,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *GetPaymentResponse) Reset() {
@@ -353,6 +382,55 @@ func (x *GetPaymentResponse) GetStatus() string {
 	return ""
 }
 
+func (x *GetPaymentResponse) GetSourceApp() string {
+	if x != nil {
+		return x.SourceApp
+	}
+	return ""
+}
+
+func (x *GetPaymentResponse) GetChannel() string {
+	if x != nil {
+		return x.Channel
+	}
+	return ""
+}
+
+func (x *GetPaymentResponse) GetTraceId() string {
+	if x != nil {
+		return x.TraceId
+	}
+	return ""
+}
+
+func (x *GetPaymentResponse) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *GetPaymentResponse) GetInitiatedBy() string {
+	if x != nil {
+		return x.InitiatedBy
+	}
+	return ""
+}
+
+func (x *GetPaymentResponse) GetRequestIp() string {
+	if x != nil {
+		return x.RequestIp
+	}
+	return ""
+}
+
+func (x *GetPaymentResponse) GetRequestUserAgent() string {
+	if x != nil {
+		return x.RequestUserAgent
+	}
+	return ""
+}
+
 // CreateRefundRequest deliberately has no tenant_id/livemode field — same as
 // REST's CreateRefundInput, those are derived server-side from the locked
 // parent payment row (see rest/refund.go's handleCreateRefund), never taken
@@ -363,8 +441,12 @@ type CreateRefundRequest struct {
 	PaymentId      string                 `protobuf:"bytes,2,opt,name=payment_id,json=paymentId,proto3" json:"payment_id,omitempty"`
 	Currency       string                 `protobuf:"bytes,3,opt,name=currency,proto3" json:"currency,omitempty"`
 	Amount         int64                  `protobuf:"varint,4,opt,name=amount,proto3" json:"amount,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// source_app/description mirror CreatePaymentRequest's fields — see
+	// payment.Envelope's doc.
+	SourceApp     string `protobuf:"bytes,5,opt,name=source_app,json=sourceApp,proto3" json:"source_app,omitempty"`
+	Description   string `protobuf:"bytes,6,opt,name=description,proto3" json:"description,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateRefundRequest) Reset() {
@@ -423,6 +505,20 @@ func (x *CreateRefundRequest) GetAmount() int64 {
 		return x.Amount
 	}
 	return 0
+}
+
+func (x *CreateRefundRequest) GetSourceApp() string {
+	if x != nil {
+		return x.SourceApp
+	}
+	return ""
+}
+
+func (x *CreateRefundRequest) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
 }
 
 type CreateRefundResponse struct {
@@ -549,8 +645,17 @@ type GetRefundResponse struct {
 	ProviderRef       string                 `protobuf:"bytes,8,opt,name=provider_ref,json=providerRef,proto3" json:"provider_ref,omitempty"`
 	ProviderRefundRef string                 `protobuf:"bytes,9,opt,name=provider_refund_ref,json=providerRefundRef,proto3" json:"provider_refund_ref,omitempty"`
 	Status            string                 `protobuf:"bytes,10,opt,name=status,proto3" json:"status,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Envelope fields (see payment.Envelope's doc), exposed verbatim —
+	// mirrors REST's refundView.
+	SourceApp        string `protobuf:"bytes,11,opt,name=source_app,json=sourceApp,proto3" json:"source_app,omitempty"`
+	Channel          string `protobuf:"bytes,12,opt,name=channel,proto3" json:"channel,omitempty"`
+	TraceId          string `protobuf:"bytes,13,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
+	Description      string `protobuf:"bytes,14,opt,name=description,proto3" json:"description,omitempty"`
+	InitiatedBy      string `protobuf:"bytes,15,opt,name=initiated_by,json=initiatedBy,proto3" json:"initiated_by,omitempty"`
+	RequestIp        string `protobuf:"bytes,16,opt,name=request_ip,json=requestIp,proto3" json:"request_ip,omitempty"`
+	RequestUserAgent string `protobuf:"bytes,17,opt,name=request_user_agent,json=requestUserAgent,proto3" json:"request_user_agent,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *GetRefundResponse) Reset() {
@@ -653,6 +758,55 @@ func (x *GetRefundResponse) GetStatus() string {
 	return ""
 }
 
+func (x *GetRefundResponse) GetSourceApp() string {
+	if x != nil {
+		return x.SourceApp
+	}
+	return ""
+}
+
+func (x *GetRefundResponse) GetChannel() string {
+	if x != nil {
+		return x.Channel
+	}
+	return ""
+}
+
+func (x *GetRefundResponse) GetTraceId() string {
+	if x != nil {
+		return x.TraceId
+	}
+	return ""
+}
+
+func (x *GetRefundResponse) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *GetRefundResponse) GetInitiatedBy() string {
+	if x != nil {
+		return x.InitiatedBy
+	}
+	return ""
+}
+
+func (x *GetRefundResponse) GetRequestIp() string {
+	if x != nil {
+		return x.RequestIp
+	}
+	return ""
+}
+
+func (x *GetRefundResponse) GetRequestUserAgent() string {
+	if x != nil {
+		return x.RequestUserAgent
+	}
+	return ""
+}
+
 // CreatePayoutRequest has no counterpart-derived fields (unlike
 // CreateRefundRequest): a payout is standalone, so provider/destination are
 // caller-supplied here, not derived server-side from a parent row.
@@ -666,8 +820,12 @@ type CreatePayoutRequest struct {
 	Provider       string                 `protobuf:"bytes,6,opt,name=provider,proto3" json:"provider,omitempty"`
 	Destination    string                 `protobuf:"bytes,7,opt,name=destination,proto3" json:"destination,omitempty"`
 	Metadata       map[string]string      `protobuf:"bytes,8,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// source_app/description mirror CreatePaymentRequest's fields — see
+	// payment.Envelope's doc.
+	SourceApp     string `protobuf:"bytes,9,opt,name=source_app,json=sourceApp,proto3" json:"source_app,omitempty"`
+	Description   string `protobuf:"bytes,10,opt,name=description,proto3" json:"description,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreatePayoutRequest) Reset() {
@@ -754,6 +912,20 @@ func (x *CreatePayoutRequest) GetMetadata() map[string]string {
 		return x.Metadata
 	}
 	return nil
+}
+
+func (x *CreatePayoutRequest) GetSourceApp() string {
+	if x != nil {
+		return x.SourceApp
+	}
+	return ""
+}
+
+func (x *CreatePayoutRequest) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
 }
 
 type CreatePayoutResponse struct {
@@ -880,8 +1052,17 @@ type GetPayoutResponse struct {
 	ProviderRef   string                 `protobuf:"bytes,8,opt,name=provider_ref,json=providerRef,proto3" json:"provider_ref,omitempty"`
 	Destination   string                 `protobuf:"bytes,9,opt,name=destination,proto3" json:"destination,omitempty"`
 	Status        string                 `protobuf:"bytes,10,opt,name=status,proto3" json:"status,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Envelope fields (see payment.Envelope's doc), exposed verbatim —
+	// mirrors REST's payoutView.
+	SourceApp        string `protobuf:"bytes,11,opt,name=source_app,json=sourceApp,proto3" json:"source_app,omitempty"`
+	Channel          string `protobuf:"bytes,12,opt,name=channel,proto3" json:"channel,omitempty"`
+	TraceId          string `protobuf:"bytes,13,opt,name=trace_id,json=traceId,proto3" json:"trace_id,omitempty"`
+	Description      string `protobuf:"bytes,14,opt,name=description,proto3" json:"description,omitempty"`
+	InitiatedBy      string `protobuf:"bytes,15,opt,name=initiated_by,json=initiatedBy,proto3" json:"initiated_by,omitempty"`
+	RequestIp        string `protobuf:"bytes,16,opt,name=request_ip,json=requestIp,proto3" json:"request_ip,omitempty"`
+	RequestUserAgent string `protobuf:"bytes,17,opt,name=request_user_agent,json=requestUserAgent,proto3" json:"request_user_agent,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *GetPayoutResponse) Reset() {
@@ -984,12 +1165,61 @@ func (x *GetPayoutResponse) GetStatus() string {
 	return ""
 }
 
+func (x *GetPayoutResponse) GetSourceApp() string {
+	if x != nil {
+		return x.SourceApp
+	}
+	return ""
+}
+
+func (x *GetPayoutResponse) GetChannel() string {
+	if x != nil {
+		return x.Channel
+	}
+	return ""
+}
+
+func (x *GetPayoutResponse) GetTraceId() string {
+	if x != nil {
+		return x.TraceId
+	}
+	return ""
+}
+
+func (x *GetPayoutResponse) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *GetPayoutResponse) GetInitiatedBy() string {
+	if x != nil {
+		return x.InitiatedBy
+	}
+	return ""
+}
+
+func (x *GetPayoutResponse) GetRequestIp() string {
+	if x != nil {
+		return x.RequestIp
+	}
+	return ""
+}
+
+func (x *GetPayoutResponse) GetRequestUserAgent() string {
+	if x != nil {
+		return x.RequestUserAgent
+	}
+	return ""
+}
+
 var File_payment_v1_payment_proto protoreflect.FileDescriptor
 
 const file_payment_v1_payment_proto_rawDesc = "" +
 	"\n" +
 	"\x18payment/v1/payment.proto\x12\n" +
-	"payment.v1\"\xf8\x02\n" +
+	"payment.v1\"\xb9\x03\n" +
 	"\x14CreatePaymentRequest\x12'\n" +
 	"\x0fidempotency_key\x18\x01 \x01(\tR\x0eidempotencyKey\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x1a\n" +
@@ -998,7 +1228,11 @@ const file_payment_v1_payment_proto_rawDesc = "" +
 	"\x06amount\x18\x05 \x01(\x03R\x06amount\x12\x1a\n" +
 	"\bprovider\x18\x06 \x01(\tR\bprovider\x12%\n" +
 	"\x0epayment_method\x18\a \x01(\tR\rpaymentMethod\x12J\n" +
-	"\bmetadata\x18\b \x03(\v2..payment.v1.CreatePaymentRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\bmetadata\x18\b \x03(\v2..payment.v1.CreatePaymentRequest.MetadataEntryR\bmetadata\x12\x1d\n" +
+	"\n" +
+	"source_app\x18\t \x01(\tR\tsourceApp\x12 \n" +
+	"\vdescription\x18\n" +
+	" \x01(\tR\vdescription\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8d\x01\n" +
@@ -1010,7 +1244,7 @@ const file_payment_v1_payment_proto_rawDesc = "" +
 	"\breplayed\x18\x04 \x01(\bR\breplayed\"2\n" +
 	"\x11GetPaymentRequest\x12\x1d\n" +
 	"\n" +
-	"payment_id\x18\x01 \x01(\tR\tpaymentId\"\x9e\x02\n" +
+	"payment_id\x18\x01 \x01(\tR\tpaymentId\"\x84\x04\n" +
 	"\x12GetPaymentResponse\x12\x1d\n" +
 	"\n" +
 	"payment_id\x18\x01 \x01(\tR\tpaymentId\x12\x1b\n" +
@@ -1021,13 +1255,26 @@ const file_payment_v1_payment_proto_rawDesc = "" +
 	"\x0eoperation_type\x18\x06 \x01(\tR\roperationType\x12\x1a\n" +
 	"\bprovider\x18\a \x01(\tR\bprovider\x12!\n" +
 	"\fprovider_ref\x18\b \x01(\tR\vproviderRef\x12\x16\n" +
-	"\x06status\x18\t \x01(\tR\x06status\"\x91\x01\n" +
+	"\x06status\x18\t \x01(\tR\x06status\x12\x1d\n" +
+	"\n" +
+	"source_app\x18\n" +
+	" \x01(\tR\tsourceApp\x12\x18\n" +
+	"\achannel\x18\v \x01(\tR\achannel\x12\x19\n" +
+	"\btrace_id\x18\f \x01(\tR\atraceId\x12 \n" +
+	"\vdescription\x18\r \x01(\tR\vdescription\x12!\n" +
+	"\finitiated_by\x18\x0e \x01(\tR\vinitiatedBy\x12\x1d\n" +
+	"\n" +
+	"request_ip\x18\x0f \x01(\tR\trequestIp\x12,\n" +
+	"\x12request_user_agent\x18\x10 \x01(\tR\x10requestUserAgent\"\xd2\x01\n" +
 	"\x13CreateRefundRequest\x12'\n" +
 	"\x0fidempotency_key\x18\x01 \x01(\tR\x0eidempotencyKey\x12\x1d\n" +
 	"\n" +
 	"payment_id\x18\x02 \x01(\tR\tpaymentId\x12\x1a\n" +
 	"\bcurrency\x18\x03 \x01(\tR\bcurrency\x12\x16\n" +
-	"\x06amount\x18\x04 \x01(\x03R\x06amount\"\x86\x01\n" +
+	"\x06amount\x18\x04 \x01(\x03R\x06amount\x12\x1d\n" +
+	"\n" +
+	"source_app\x18\x05 \x01(\tR\tsourceApp\x12 \n" +
+	"\vdescription\x18\x06 \x01(\tR\vdescription\"\x86\x01\n" +
 	"\x14CreateRefundResponse\x12\x1b\n" +
 	"\trefund_id\x18\x01 \x01(\tR\brefundId\x12\x1d\n" +
 	"\n" +
@@ -1035,7 +1282,7 @@ const file_payment_v1_payment_proto_rawDesc = "" +
 	"\x06status\x18\x03 \x01(\tR\x06status\x12\x1a\n" +
 	"\breplayed\x18\x04 \x01(\bR\breplayed\"/\n" +
 	"\x10GetRefundRequest\x12\x1b\n" +
-	"\trefund_id\x18\x01 \x01(\tR\brefundId\"\xc3\x02\n" +
+	"\trefund_id\x18\x01 \x01(\tR\brefundId\"\xa9\x04\n" +
 	"\x11GetRefundResponse\x12\x1b\n" +
 	"\trefund_id\x18\x01 \x01(\tR\brefundId\x12\x1d\n" +
 	"\n" +
@@ -1048,7 +1295,16 @@ const file_payment_v1_payment_proto_rawDesc = "" +
 	"\fprovider_ref\x18\b \x01(\tR\vproviderRef\x12.\n" +
 	"\x13provider_refund_ref\x18\t \x01(\tR\x11providerRefundRef\x12\x16\n" +
 	"\x06status\x18\n" +
-	" \x01(\tR\x06status\"\xf1\x02\n" +
+	" \x01(\tR\x06status\x12\x1d\n" +
+	"\n" +
+	"source_app\x18\v \x01(\tR\tsourceApp\x12\x18\n" +
+	"\achannel\x18\f \x01(\tR\achannel\x12\x19\n" +
+	"\btrace_id\x18\r \x01(\tR\atraceId\x12 \n" +
+	"\vdescription\x18\x0e \x01(\tR\vdescription\x12!\n" +
+	"\finitiated_by\x18\x0f \x01(\tR\vinitiatedBy\x12\x1d\n" +
+	"\n" +
+	"request_ip\x18\x10 \x01(\tR\trequestIp\x12,\n" +
+	"\x12request_user_agent\x18\x11 \x01(\tR\x10requestUserAgent\"\xb2\x03\n" +
 	"\x13CreatePayoutRequest\x12'\n" +
 	"\x0fidempotency_key\x18\x01 \x01(\tR\x0eidempotencyKey\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x1a\n" +
@@ -1057,7 +1313,11 @@ const file_payment_v1_payment_proto_rawDesc = "" +
 	"\x06amount\x18\x05 \x01(\x03R\x06amount\x12\x1a\n" +
 	"\bprovider\x18\x06 \x01(\tR\bprovider\x12 \n" +
 	"\vdestination\x18\a \x01(\tR\vdestination\x12I\n" +
-	"\bmetadata\x18\b \x03(\v2-.payment.v1.CreatePayoutRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\bmetadata\x18\b \x03(\v2-.payment.v1.CreatePayoutRequest.MetadataEntryR\bmetadata\x12\x1d\n" +
+	"\n" +
+	"source_app\x18\t \x01(\tR\tsourceApp\x12 \n" +
+	"\vdescription\x18\n" +
+	" \x01(\tR\vdescription\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8a\x01\n" +
@@ -1067,7 +1327,7 @@ const file_payment_v1_payment_proto_rawDesc = "" +
 	"\fprovider_ref\x18\x03 \x01(\tR\vproviderRef\x12\x1a\n" +
 	"\breplayed\x18\x04 \x01(\bR\breplayed\"/\n" +
 	"\x10GetPayoutRequest\x12\x1b\n" +
-	"\tpayout_id\x18\x01 \x01(\tR\bpayoutId\"\xbd\x02\n" +
+	"\tpayout_id\x18\x01 \x01(\tR\bpayoutId\"\xa3\x04\n" +
 	"\x11GetPayoutResponse\x12\x1b\n" +
 	"\tpayout_id\x18\x01 \x01(\tR\bpayoutId\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x1a\n" +
@@ -1079,7 +1339,16 @@ const file_payment_v1_payment_proto_rawDesc = "" +
 	"\fprovider_ref\x18\b \x01(\tR\vproviderRef\x12 \n" +
 	"\vdestination\x18\t \x01(\tR\vdestination\x12\x16\n" +
 	"\x06status\x18\n" +
-	" \x01(\tR\x06status2\xed\x03\n" +
+	" \x01(\tR\x06status\x12\x1d\n" +
+	"\n" +
+	"source_app\x18\v \x01(\tR\tsourceApp\x12\x18\n" +
+	"\achannel\x18\f \x01(\tR\achannel\x12\x19\n" +
+	"\btrace_id\x18\r \x01(\tR\atraceId\x12 \n" +
+	"\vdescription\x18\x0e \x01(\tR\vdescription\x12!\n" +
+	"\finitiated_by\x18\x0f \x01(\tR\vinitiatedBy\x12\x1d\n" +
+	"\n" +
+	"request_ip\x18\x10 \x01(\tR\trequestIp\x12,\n" +
+	"\x12request_user_agent\x18\x11 \x01(\tR\x10requestUserAgent2\xed\x03\n" +
 	"\x0ePaymentService\x12T\n" +
 	"\rCreatePayment\x12 .payment.v1.CreatePaymentRequest\x1a!.payment.v1.CreatePaymentResponse\x12K\n" +
 	"\n" +

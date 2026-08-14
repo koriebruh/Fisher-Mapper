@@ -58,12 +58,16 @@ func (s *Server) CreatePayment(ctx context.Context, req *pb.CreatePaymentRequest
 		Provider:      req.GetProvider(),
 		PaymentMethod: req.GetPaymentMethod(),
 		Metadata:      req.GetMetadata(),
+		Envelope:      buildEnvelope(req.GetSourceApp(), req.GetDescription()),
 	}
 
 	raw, err := fingerprintBasis(in)
 	if err != nil {
 		return nil, statusFromError(apperror.Wrap(apperror.CodeInternal, "grpc: marshal fingerprint basis", err))
 	}
+
+	// Populated AFTER the fingerprint above -- see buildEnvelope's doc.
+	populateRequestContext(ctx, &in.Envelope)
 
 	out, err := s.service.CreatePayment(ctx, in, req.GetIdempotencyKey(), raw)
 	if err != nil {
@@ -93,15 +97,23 @@ func (s *Server) GetPayment(ctx context.Context, req *pb.GetPaymentRequest) (*pb
 		return nil, statusFromError(err)
 	}
 
+	env := newEnvelopeView(p.Envelope)
 	resp := &pb.GetPaymentResponse{
-		PaymentId:     p.ID.String(),
-		TenantId:      p.TenantID,
-		Livemode:      p.Livemode,
-		Currency:      p.Currency,
-		Amount:        p.Amount,
-		OperationType: string(p.OperationType),
-		Provider:      p.Provider,
-		Status:        string(p.Status),
+		PaymentId:        p.ID.String(),
+		TenantId:         p.TenantID,
+		Livemode:         p.Livemode,
+		Currency:         p.Currency,
+		Amount:           p.Amount,
+		OperationType:    string(p.OperationType),
+		Provider:         p.Provider,
+		Status:           string(p.Status),
+		SourceApp:        env.SourceApp,
+		Channel:          env.Channel,
+		TraceId:          env.TraceID,
+		Description:      env.Description,
+		InitiatedBy:      env.InitiatedBy,
+		RequestIp:        env.RequestIP,
+		RequestUserAgent: env.RequestUserAgent,
 	}
 	if p.ProviderRef != nil {
 		resp.ProviderRef = *p.ProviderRef
@@ -130,12 +142,16 @@ func (s *Server) CreateRefund(ctx context.Context, req *pb.CreateRefundRequest) 
 		Livemode:  p.Livemode,
 		Currency:  req.GetCurrency(),
 		Amount:    req.GetAmount(),
+		Envelope:  buildEnvelope(req.GetSourceApp(), req.GetDescription()),
 	}
 
 	raw, err := fingerprintBasis(in)
 	if err != nil {
 		return nil, statusFromError(apperror.Wrap(apperror.CodeInternal, "grpc: marshal fingerprint basis", err))
 	}
+
+	// Populated AFTER the fingerprint above -- see buildEnvelope's doc.
+	populateRequestContext(ctx, &in.Envelope)
 
 	out, err := s.service.CreateRefund(ctx, in, req.GetIdempotencyKey(), raw)
 	if err != nil {
@@ -163,15 +179,23 @@ func (s *Server) GetRefund(ctx context.Context, req *pb.GetRefundRequest) (*pb.G
 		return nil, statusFromError(err)
 	}
 
+	env := newEnvelopeView(r.Envelope)
 	resp := &pb.GetRefundResponse{
-		RefundId:  r.ID.String(),
-		PaymentId: r.PaymentID.String(),
-		TenantId:  r.TenantID,
-		Livemode:  r.Livemode,
-		Currency:  r.Currency,
-		Amount:    r.Amount,
-		Provider:  r.Provider,
-		Status:    string(r.Status),
+		RefundId:         r.ID.String(),
+		PaymentId:        r.PaymentID.String(),
+		TenantId:         r.TenantID,
+		Livemode:         r.Livemode,
+		Currency:         r.Currency,
+		Amount:           r.Amount,
+		Provider:         r.Provider,
+		Status:           string(r.Status),
+		SourceApp:        env.SourceApp,
+		Channel:          env.Channel,
+		TraceId:          env.TraceID,
+		Description:      env.Description,
+		InitiatedBy:      env.InitiatedBy,
+		RequestIp:        env.RequestIP,
+		RequestUserAgent: env.RequestUserAgent,
 	}
 	if r.ProviderRef != nil {
 		resp.ProviderRef = *r.ProviderRef
@@ -194,12 +218,16 @@ func (s *Server) CreatePayout(ctx context.Context, req *pb.CreatePayoutRequest) 
 		Provider:    req.GetProvider(),
 		Destination: req.GetDestination(),
 		Metadata:    req.GetMetadata(),
+		Envelope:    buildEnvelope(req.GetSourceApp(), req.GetDescription()),
 	}
 
 	raw, err := fingerprintBasis(in)
 	if err != nil {
 		return nil, statusFromError(apperror.Wrap(apperror.CodeInternal, "grpc: marshal fingerprint basis", err))
 	}
+
+	// Populated AFTER the fingerprint above -- see buildEnvelope's doc.
+	populateRequestContext(ctx, &in.Envelope)
 
 	out, err := s.service.CreatePayout(ctx, in, req.GetIdempotencyKey(), raw)
 	if err != nil {
@@ -226,16 +254,24 @@ func (s *Server) GetPayout(ctx context.Context, req *pb.GetPayoutRequest) (*pb.G
 		return nil, statusFromError(err)
 	}
 
+	env := newEnvelopeView(p.Envelope)
 	resp := &pb.GetPayoutResponse{
-		PayoutId:      p.ID.String(),
-		TenantId:      p.TenantID,
-		Livemode:      p.Livemode,
-		Currency:      p.Currency,
-		Amount:        p.Amount,
-		OperationType: string(payment.OperationPayout),
-		Provider:      p.Provider,
-		Destination:   p.Destination,
-		Status:        string(p.Status),
+		PayoutId:         p.ID.String(),
+		TenantId:         p.TenantID,
+		Livemode:         p.Livemode,
+		Currency:         p.Currency,
+		Amount:           p.Amount,
+		OperationType:    string(payment.OperationPayout),
+		Provider:         p.Provider,
+		Destination:      p.Destination,
+		Status:           string(p.Status),
+		SourceApp:        env.SourceApp,
+		Channel:          env.Channel,
+		TraceId:          env.TraceID,
+		Description:      env.Description,
+		InitiatedBy:      env.InitiatedBy,
+		RequestIp:        env.RequestIP,
+		RequestUserAgent: env.RequestUserAgent,
 	}
 	if p.ProviderRef != nil {
 		resp.ProviderRef = *p.ProviderRef

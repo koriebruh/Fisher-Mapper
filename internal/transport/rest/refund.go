@@ -13,6 +13,11 @@ import (
 type createRefundRequest struct {
 	Currency string `json:"currency"`
 	Amount   int64  `json:"amount"`
+
+	// SourceApp/Description mirror createPaymentRequest's fields -- see
+	// payment.Envelope's doc.
+	SourceApp   *string `json:"source_app,omitempty"`
+	Description *string `json:"description,omitempty"`
 }
 
 // RegisterRefundRoutes registers the Fase 4 refund endpoints on the same
@@ -51,6 +56,7 @@ func handleCreateRefund(deps PaymentDeps) fiber.Handler {
 			Livemode:  p.Livemode,
 			Currency:  req.Currency,
 			Amount:    req.Amount,
+			Envelope:  buildEnvelope(c, req.SourceApp, req.Description),
 		}
 
 		out, err := deps.Service.CreateRefund(c.UserContext(), input, idempotencyKey, raw)
@@ -71,6 +77,44 @@ type refundView struct {
 	PaymentID         uuid.UUID `json:"payment_id"`
 	Status            string    `json:"status"`
 	ProviderRefundRef string    `json:"provider_refund_ref,omitempty"`
+
+	// Envelope fields, exposed verbatim -- mirrors paymentView.
+	SourceApp        string `json:"source_app,omitempty"`
+	Channel          string `json:"channel"`
+	TraceID          string `json:"trace_id,omitempty"`
+	Description      string `json:"description,omitempty"`
+	InitiatedBy      string `json:"initiated_by"`
+	RequestIP        string `json:"request_ip,omitempty"`
+	RequestUserAgent string `json:"request_user_agent,omitempty"`
+}
+
+func newRefundView(r *payment.Refund) refundView {
+	view := refundView{
+		RefundID:    r.ID,
+		PaymentID:   r.PaymentID,
+		Status:      string(r.Status),
+		Channel:     r.Channel,
+		InitiatedBy: r.InitiatedBy,
+	}
+	if r.ProviderRefundRef != nil {
+		view.ProviderRefundRef = *r.ProviderRefundRef
+	}
+	if r.SourceApp != nil {
+		view.SourceApp = *r.SourceApp
+	}
+	if r.TraceID != nil {
+		view.TraceID = *r.TraceID
+	}
+	if r.Description != nil {
+		view.Description = *r.Description
+	}
+	if r.RequestIP != nil {
+		view.RequestIP = *r.RequestIP
+	}
+	if r.RequestUserAgent != nil {
+		view.RequestUserAgent = *r.RequestUserAgent
+	}
+	return view
 }
 
 func handleGetRefund(deps PaymentDeps) fiber.Handler {
@@ -85,10 +129,6 @@ func handleGetRefund(deps PaymentDeps) fiber.Handler {
 			return writeError(c, err)
 		}
 
-		view := refundView{RefundID: r.ID, PaymentID: r.PaymentID, Status: string(r.Status)}
-		if r.ProviderRefundRef != nil {
-			view.ProviderRefundRef = *r.ProviderRefundRef
-		}
-		return c.JSON(view)
+		return c.JSON(newRefundView(r))
 	}
 }

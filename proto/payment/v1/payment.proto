@@ -53,6 +53,12 @@ message CreatePaymentRequest {
   string provider = 6;
   string payment_method = 7;
   map<string, string> metadata = 8;
+  // source_app/description are the two caller-supplied Envelope fields —
+  // see payment.Envelope's doc. Both optional; an empty string is treated
+  // as "not set" (plain string, not proto3 `optional`, since that
+  // distinction has no meaning either field needs to make).
+  string source_app = 9;
+  string description = 10;
 }
 
 message CreatePaymentResponse {
@@ -83,6 +89,15 @@ message GetPaymentResponse {
   string provider = 7;
   string provider_ref = 8;
   string status = 9;
+  // Envelope fields (see payment.Envelope's doc), exposed verbatim —
+  // mirrors REST's paymentView.
+  string source_app = 10;
+  string channel = 11;
+  string trace_id = 12;
+  string description = 13;
+  string initiated_by = 14;
+  string request_ip = 15;
+  string request_user_agent = 16;
 }
 
 // CreateRefundRequest deliberately has no tenant_id/livemode field — same as
@@ -94,6 +109,10 @@ message CreateRefundRequest {
   string payment_id = 2;
   string currency = 3;
   int64 amount = 4;
+  // source_app/description mirror CreatePaymentRequest's fields — see
+  // payment.Envelope's doc.
+  string source_app = 5;
+  string description = 6;
 }
 
 message CreateRefundResponse {
@@ -118,6 +137,15 @@ message GetRefundResponse {
   string provider_ref = 8;
   string provider_refund_ref = 9;
   string status = 10;
+  // Envelope fields (see payment.Envelope's doc), exposed verbatim —
+  // mirrors REST's refundView.
+  string source_app = 11;
+  string channel = 12;
+  string trace_id = 13;
+  string description = 14;
+  string initiated_by = 15;
+  string request_ip = 16;
+  string request_user_agent = 17;
 }
 
 // CreatePayoutRequest has no counterpart-derived fields (unlike
@@ -132,6 +160,10 @@ message CreatePayoutRequest {
   string provider = 6;
   string destination = 7;
   map<string, string> metadata = 8;
+  // source_app/description mirror CreatePaymentRequest's fields — see
+  // payment.Envelope's doc.
+  string source_app = 9;
+  string description = 10;
 }
 
 message CreatePayoutResponse {
@@ -156,4 +188,13 @@ message GetPayoutResponse {
   string provider_ref = 8;
   string destination = 9;
   string status = 10;
+  // Envelope fields (see payment.Envelope's doc), exposed verbatim —
+  // mirrors REST's payoutView.
+  string source_app = 11;
+  string channel = 12;
+  string trace_id = 13;
+  string description = 14;
+  string initiated_by = 15;
+  string request_ip = 16;
+  string request_user_agent = 17;
 }

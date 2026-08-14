@@ -31,6 +31,16 @@ type CreatePaymentInput struct {
 	Provider      string
 	PaymentMethod string
 	Metadata      map[string]string
+
+	// Envelope is populated entirely by the TRANSPORT layer (REST/gRPC),
+	// never derived here -- see Envelope's own doc for which sub-fields are
+	// caller-supplied vs transport-set. RequestIP/RequestUserAgent/TraceID
+	// deliberately do NOT feed into the gRPC transport's idempotency
+	// fingerprint (see grpc.fingerprintBasis callers) -- they vary per
+	// attempt/peer, and a fingerprint that shifted with them would turn a
+	// legitimate retry from a different network path into a false
+	// CodeIdempotencyConflict.
+	Envelope
 }
 
 // CreatePaymentOutput is what CreatePayment returns, and — serialized
@@ -272,6 +282,7 @@ func (s *Service) doCreatePayment(ctx context.Context, in CreatePaymentInput, id
 		Amount:        in.Amount,
 		OperationType: OperationCharge,
 		Provider:      in.Provider,
+		Envelope:      in.Envelope,
 	}
 
 	taskInput := ChargeTaskInput{

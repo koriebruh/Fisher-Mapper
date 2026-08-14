@@ -22,6 +22,12 @@ type createPayoutRequest struct {
 	Provider    string            `json:"provider"`
 	Destination string            `json:"destination"`
 	Metadata    map[string]string `json:"metadata"`
+
+	// SourceApp/Description mirror createPaymentRequest's fields -- see
+	// payment.Envelope's doc. Payout must carry the SAME envelope
+	// completeness as charge/refund.
+	SourceApp   *string `json:"source_app,omitempty"`
+	Description *string `json:"description,omitempty"`
 }
 
 // RegisterPayoutRoutes registers the payout endpoints on router -- same thin
@@ -52,6 +58,7 @@ func handleCreatePayout(deps PaymentDeps) fiber.Handler {
 			Provider:    req.Provider,
 			Destination: req.Destination,
 			Metadata:    req.Metadata,
+			Envelope:    buildEnvelope(c, req.SourceApp, req.Description),
 		}
 
 		out, err := deps.Service.CreatePayout(c.UserContext(), input, idempotencyKey, raw)
@@ -71,6 +78,43 @@ type payoutView struct {
 	PayoutID    uuid.UUID `json:"payout_id"`
 	Status      string    `json:"status"`
 	ProviderRef string    `json:"provider_ref,omitempty"`
+
+	// Envelope fields, exposed verbatim -- mirrors paymentView/refundView.
+	SourceApp        string `json:"source_app,omitempty"`
+	Channel          string `json:"channel"`
+	TraceID          string `json:"trace_id,omitempty"`
+	Description      string `json:"description,omitempty"`
+	InitiatedBy      string `json:"initiated_by"`
+	RequestIP        string `json:"request_ip,omitempty"`
+	RequestUserAgent string `json:"request_user_agent,omitempty"`
+}
+
+func newPayoutView(p *payment.Payout) payoutView {
+	view := payoutView{
+		PayoutID:    p.ID,
+		Status:      string(p.Status),
+		Channel:     p.Channel,
+		InitiatedBy: p.InitiatedBy,
+	}
+	if p.ProviderRef != nil {
+		view.ProviderRef = *p.ProviderRef
+	}
+	if p.SourceApp != nil {
+		view.SourceApp = *p.SourceApp
+	}
+	if p.TraceID != nil {
+		view.TraceID = *p.TraceID
+	}
+	if p.Description != nil {
+		view.Description = *p.Description
+	}
+	if p.RequestIP != nil {
+		view.RequestIP = *p.RequestIP
+	}
+	if p.RequestUserAgent != nil {
+		view.RequestUserAgent = *p.RequestUserAgent
+	}
+	return view
 }
 
 func handleGetPayout(deps PaymentDeps) fiber.Handler {
@@ -85,10 +129,6 @@ func handleGetPayout(deps PaymentDeps) fiber.Handler {
 			return writeError(c, err)
 		}
 
-		view := payoutView{PayoutID: p.ID, Status: string(p.Status)}
-		if p.ProviderRef != nil {
-			view.ProviderRef = *p.ProviderRef
-		}
-		return c.JSON(view)
+		return c.JSON(newPayoutView(p))
 	}
 }

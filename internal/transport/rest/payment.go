@@ -27,6 +27,11 @@ type createPaymentRequest struct {
 	Provider      string            `json:"provider"`
 	PaymentMethod string            `json:"payment_method"`
 	Metadata      map[string]string `json:"metadata"`
+
+	// SourceApp/Description are the two caller-supplied Envelope fields --
+	// see payment.Envelope's doc. Both optional.
+	SourceApp   *string `json:"source_app,omitempty"`
+	Description *string `json:"description,omitempty"`
 }
 
 // RegisterPaymentRoutes registers the payment endpoints on router (either
@@ -68,6 +73,7 @@ func handleCreatePayment(deps PaymentDeps) fiber.Handler {
 			Provider:      req.Provider,
 			PaymentMethod: req.PaymentMethod,
 			Metadata:      req.Metadata,
+			Envelope:      buildEnvelope(c, req.SourceApp, req.Description),
 		}
 
 		// UserContext (not Context): otelfiber's tracing middleware stores
@@ -99,6 +105,48 @@ type paymentView struct {
 	PaymentID   uuid.UUID `json:"payment_id"`
 	Status      string    `json:"status"`
 	ProviderRef string    `json:"provider_ref,omitempty"`
+
+	// Envelope fields, exposed verbatim -- see payment.Envelope's doc for
+	// what each one means.
+	SourceApp        string `json:"source_app,omitempty"`
+	Channel          string `json:"channel"`
+	TraceID          string `json:"trace_id,omitempty"`
+	Description      string `json:"description,omitempty"`
+	InitiatedBy      string `json:"initiated_by"`
+	RequestIP        string `json:"request_ip,omitempty"`
+	RequestUserAgent string `json:"request_user_agent,omitempty"`
+}
+
+// newPaymentView copies p's envelope pointer fields into their
+// omitempty-friendly plain-string equivalents -- shared shape for both
+// direct GET responses and, once populated the same way, any future list
+// endpoint.
+func newPaymentView(p *payment.Payment) paymentView {
+	view := paymentView{
+		PaymentID:   p.ID,
+		Status:      string(p.Status),
+		Channel:     p.Channel,
+		InitiatedBy: p.InitiatedBy,
+	}
+	if p.ProviderRef != nil {
+		view.ProviderRef = *p.ProviderRef
+	}
+	if p.SourceApp != nil {
+		view.SourceApp = *p.SourceApp
+	}
+	if p.TraceID != nil {
+		view.TraceID = *p.TraceID
+	}
+	if p.Description != nil {
+		view.Description = *p.Description
+	}
+	if p.RequestIP != nil {
+		view.RequestIP = *p.RequestIP
+	}
+	if p.RequestUserAgent != nil {
+		view.RequestUserAgent = *p.RequestUserAgent
+	}
+	return view
 }
 
 func handleGetPayment(deps PaymentDeps) fiber.Handler {
@@ -113,10 +161,6 @@ func handleGetPayment(deps PaymentDeps) fiber.Handler {
 			return writeError(c, err)
 		}
 
-		view := paymentView{PaymentID: p.ID, Status: string(p.Status)}
-		if p.ProviderRef != nil {
-			view.ProviderRef = *p.ProviderRef
-		}
-		return c.JSON(view)
+		return c.JSON(newPaymentView(p))
 	}
 }
