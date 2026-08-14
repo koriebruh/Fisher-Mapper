@@ -202,11 +202,12 @@ func (s *Service) ProcessPayout(ctx context.Context, in PayoutTaskInput) error {
 	}
 
 	err = pr.ApplyPayoutTransition(ctx, PayoutTransitionParams{
-		PayoutID:  in.PayoutID,
-		To:        StatusProcessing,
-		EventTS:   s.now(),
-		EventType: "processing_started",
-		Provider:  in.Provider,
+		PayoutID:    in.PayoutID,
+		To:          StatusProcessing,
+		EventTS:     s.now(),
+		EventType:   "processing_started",
+		Provider:    in.Provider,
+		InitiatedBy: InitiatedBySystem,
 	})
 	if err != nil {
 		switch apperror.CodeOf(err) {
@@ -284,6 +285,7 @@ func (s *Service) ProcessPayout(ctx context.Context, in PayoutTaskInput) error {
 			EventType:   "payout_" + string(target),
 			Provider:    in.Provider,
 			ProviderRef: providerRefPtr,
+			InitiatedBy: InitiatedBySystem,
 		}); err != nil {
 			return fmt.Errorf("process payout: apply result: %w", err)
 		}

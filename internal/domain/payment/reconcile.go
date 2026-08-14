@@ -213,11 +213,12 @@ func (s *Service) ReconcilePayout(ctx context.Context, p *Payout) error {
 	}
 
 	if err := pr.ApplyPayoutTransition(ctx, PayoutTransitionParams{
-		PayoutID:  fresh.ID,
-		To:        target,
-		EventTS:   s.now(),
-		EventType: "reconciliation_" + string(target),
-		Provider:  fresh.Provider,
+		PayoutID:    fresh.ID,
+		To:          target,
+		EventTS:     s.now(),
+		EventType:   "reconciliation_" + string(target),
+		Provider:    fresh.Provider,
+		InitiatedBy: InitiatedBySystem,
 	}); err != nil {
 		switch apperror.CodeOf(err) {
 		case apperror.CodeInvalidTransition, apperror.CodeTerminalState, apperror.CodeStaleEvent:

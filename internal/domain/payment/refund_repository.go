@@ -29,6 +29,10 @@ type RefundTransitionParams struct {
 
 	ProviderEventID *string
 	RawPayload      []byte
+
+	// InitiatedBy is the per-TRANSITION actor -- see TransitionParams.InitiatedBy's
+	// doc for the full taxonomy. Every call site must set this explicitly.
+	InitiatedBy string
 }
 
 // CreateRefundWithOutbox validates and inserts a new refund row, in ONE
@@ -98,11 +102,13 @@ func (r *PGRepository) CreateRefundWithOutbox(ctx context.Context, ref *Refund, 
 	ref.ProviderRef = paymentProviderRef
 
 	const insertSQL = `
-		INSERT INTO refunds (payment_id, tenant_id, livemode, currency, amount, provider, provider_ref, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO refunds (payment_id, tenant_id, livemode, currency, amount, operation_type, provider, provider_ref, status,
+		    source_app, channel, trace_id, description, initiated_by, request_ip, request_user_agent)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 		RETURNING id, status, last_event_at, created_at, updated_at`
 	err = tx.QueryRow(ctx, insertSQL,
-		ref.PaymentID, ref.TenantID, ref.Livemode, ref.Currency, ref.Amount, ref.Provider, ref.ProviderRef, StatusPending,
+		ref.PaymentID, ref.TenantID, ref.Livemode, ref.Currency, ref.Amount, OperationRefund, ref.Provider, ref.ProviderRef, StatusPending,
+		ref.SourceApp, ref.Channel, ref.TraceID, ref.Description, ref.InitiatedBy, ref.RequestIP, ref.RequestUserAgent,
 	).Scan(&ref.ID, &ref.Status, &ref.LastEventAt, &ref.CreatedAt, &ref.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("refund: create with outbox: insert refund: %w", err)
@@ -167,10 +173,10 @@ func (r *PGRepository) ApplyRefundTransition(ctx context.Context, params RefundT
 	}
 
 	const insertEventSQL = `
-		INSERT INTO refund_events (refund_id, event_type, provider, provider_event_id, provider_event_ts, raw_payload)
-		VALUES ($1, $2, $3, $4, $5, $6)`
+		INSERT INTO refund_events (refund_id, event_type, provider, provider_event_id, provider_event_ts, raw_payload, initiated_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`
 	if _, err := tx.Exec(ctx, insertEventSQL,
-		params.RefundID, params.EventType, params.Provider, params.ProviderEventID, params.EventTS, params.RawPayload,
+		params.RefundID, params.EventType, params.Provider, params.ProviderEventID, params.EventTS, params.RawPayload, params.InitiatedBy,
 	); err != nil {
 		return fmt.Errorf("refund: apply transition: insert event: %w", err)
 	}
@@ -183,14 +189,16 @@ func (r *PGRepository) ApplyRefundTransition(ctx context.Context, params RefundT
 
 func (r *PGRepository) GetRefund(ctx context.Context, id uuid.UUID) (*Refund, error) {
 	const selectSQL = `
-		SELECT id, payment_id, tenant_id, livemode, currency, amount, provider,
-		       provider_ref, provider_refund_ref, status, last_event_at, created_at, updated_at
+		SELECT id, payment_id, tenant_id, livemode, currency, amount, operation_type, provider,
+		       provider_ref, provider_refund_ref, status, last_event_at, created_at, updated_at,
+		       source_app, channel, trace_id, description, initiated_by, request_ip, request_user_agent
 		FROM refunds WHERE id = $1`
 
 	ref := &Refund{}
 	err := r.pool.QueryRow(ctx, selectSQL, id).Scan(
-		&ref.ID, &ref.PaymentID, &ref.TenantID, &ref.Livemode, &ref.Currency, &ref.Amount, &ref.Provider,
+		&ref.ID, &ref.PaymentID, &ref.TenantID, &ref.Livemode, &ref.Currency, &ref.Amount, &ref.OperationType, &ref.Provider,
 		&ref.ProviderRef, &ref.ProviderRefundRef, &ref.Status, &ref.LastEventAt, &ref.CreatedAt, &ref.UpdatedAt,
+		&ref.SourceApp, &ref.Channel, &ref.TraceID, &ref.Description, &ref.InitiatedBy, &ref.RequestIP, &ref.RequestUserAgent,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

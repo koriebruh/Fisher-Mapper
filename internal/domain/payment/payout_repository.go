@@ -29,6 +29,10 @@ type PayoutTransitionParams struct {
 
 	ProviderEventID *string
 	RawPayload      []byte
+
+	// InitiatedBy is the per-TRANSITION actor -- see TransitionParams.InitiatedBy's
+	// doc for the full taxonomy. Every call site must set this explicitly.
+	InitiatedBy string
 }
 
 // CreatePayoutWithOutbox inserts a new payout row (status pending) and, in
@@ -44,12 +48,14 @@ func (r *PGRepository) CreatePayoutWithOutbox(ctx context.Context, p *Payout, wi
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
 
 	const insertSQL = `
-		INSERT INTO payouts (tenant_id, livemode, currency, amount, provider, destination, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO payouts (tenant_id, livemode, currency, amount, provider, destination, status,
+		    source_app, channel, trace_id, description, initiated_by, request_ip, request_user_agent)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		RETURNING id, status, last_event_at, created_at, updated_at`
 
 	err = tx.QueryRow(ctx, insertSQL,
 		p.TenantID, p.Livemode, p.Currency, p.Amount, p.Provider, p.Destination, StatusPending,
+		p.SourceApp, p.Channel, p.TraceID, p.Description, p.InitiatedBy, p.RequestIP, p.RequestUserAgent,
 	).Scan(&p.ID, &p.Status, &p.LastEventAt, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("payout: create with outbox: insert payout: %w", err)
@@ -113,10 +119,10 @@ func (r *PGRepository) ApplyPayoutTransition(ctx context.Context, params PayoutT
 	}
 
 	const insertEventSQL = `
-		INSERT INTO payout_events (payout_id, event_type, provider, provider_event_id, provider_event_ts, raw_payload)
-		VALUES ($1, $2, $3, $4, $5, $6)`
+		INSERT INTO payout_events (payout_id, event_type, provider, provider_event_id, provider_event_ts, raw_payload, initiated_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`
 	if _, err := tx.Exec(ctx, insertEventSQL,
-		params.PayoutID, params.EventType, params.Provider, params.ProviderEventID, params.EventTS, params.RawPayload,
+		params.PayoutID, params.EventType, params.Provider, params.ProviderEventID, params.EventTS, params.RawPayload, params.InitiatedBy,
 	); err != nil {
 		return fmt.Errorf("payout: apply transition: insert event: %w", err)
 	}
@@ -145,17 +151,26 @@ func (r *PGRepository) SetPayoutProviderRef(ctx context.Context, id uuid.UUID, p
 	return nil
 }
 
-func (r *PGRepository) GetPayout(ctx context.Context, id uuid.UUID) (*Payout, error) {
-	const selectSQL = `
-		SELECT id, tenant_id, livemode, currency, amount, provider,
-		       provider_ref, destination, status, last_event_at, created_at, updated_at
-		FROM payouts WHERE id = $1`
+// payoutSelectColumns/payoutScanDest mirror paymentSelectColumns/
+// paymentScanDest -- shared by GetPayout and ListPayoutsProcessingOlderThan
+// so the envelope columns can't drift out of sync between the two queries.
+const payoutSelectColumns = `id, tenant_id, livemode, currency, amount, provider,
+		       provider_ref, destination, status, last_event_at, created_at, updated_at,
+		       source_app, channel, trace_id, description, initiated_by, request_ip, request_user_agent`
 
-	p := &Payout{}
-	err := r.pool.QueryRow(ctx, selectSQL, id).Scan(
+func payoutScanDest(p *Payout) []any {
+	return []any{
 		&p.ID, &p.TenantID, &p.Livemode, &p.Currency, &p.Amount, &p.Provider,
 		&p.ProviderRef, &p.Destination, &p.Status, &p.LastEventAt, &p.CreatedAt, &p.UpdatedAt,
-	)
+		&p.SourceApp, &p.Channel, &p.TraceID, &p.Description, &p.InitiatedBy, &p.RequestIP, &p.RequestUserAgent,
+	}
+}
+
+func (r *PGRepository) GetPayout(ctx context.Context, id uuid.UUID) (*Payout, error) {
+	selectSQL := `SELECT ` + payoutSelectColumns + ` FROM payouts WHERE id = $1`
+
+	p := &Payout{}
+	err := r.pool.QueryRow(ctx, selectSQL, id).Scan(payoutScanDest(p)...)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, apperror.New(apperror.CodeNotFound, "payout: not found")
@@ -171,9 +186,7 @@ func (r *PGRepository) GetPayout(ctx context.Context, id uuid.UUID) (*Payout, er
 // payouts (mandatory per the task: payouts must be reconcilable the same
 // way stuck charges are, not just documented as a gap).
 func (r *PGRepository) ListPayoutsProcessingOlderThan(ctx context.Context, cutoff time.Time) ([]*Payout, error) {
-	const selectSQL = `
-		SELECT id, tenant_id, livemode, currency, amount, provider,
-		       provider_ref, destination, status, last_event_at, created_at, updated_at
+	selectSQL := `SELECT ` + payoutSelectColumns + `
 		FROM payouts
 		WHERE status = 'processing' AND last_event_at < $1
 		ORDER BY last_event_at`
@@ -187,10 +200,7 @@ func (r *PGRepository) ListPayoutsProcessingOlderThan(ctx context.Context, cutof
 	var out []*Payout
 	for rows.Next() {
 		p := &Payout{}
-		if err := rows.Scan(
-			&p.ID, &p.TenantID, &p.Livemode, &p.Currency, &p.Amount, &p.Provider,
-			&p.ProviderRef, &p.Destination, &p.Status, &p.LastEventAt, &p.CreatedAt, &p.UpdatedAt,
-		); err != nil {
+		if err := rows.Scan(payoutScanDest(p)...); err != nil {
 			return nil, fmt.Errorf("payout: list processing older than: scan: %w", err)
 		}
 		out = append(out, p)

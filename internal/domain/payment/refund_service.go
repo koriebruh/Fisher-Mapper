@@ -133,11 +133,12 @@ func (s *Service) doCreateRefund(ctx context.Context, in CreateRefundInput, idem
 	}
 
 	ref := &Refund{
-		PaymentID: in.PaymentID,
-		TenantID:  in.TenantID,
-		Livemode:  in.Livemode,
-		Currency:  in.Currency,
-		Amount:    in.Amount,
+		PaymentID:     in.PaymentID,
+		TenantID:      in.TenantID,
+		Livemode:      in.Livemode,
+		Currency:      in.Currency,
+		Amount:        in.Amount,
+		OperationType: OperationRefund,
 	}
 
 	taskInput := RefundTaskInput{
@@ -215,11 +216,12 @@ func (s *Service) ProcessRefund(ctx context.Context, in RefundTaskInput) error {
 	}
 
 	err = rr.ApplyRefundTransition(ctx, RefundTransitionParams{
-		RefundID:  in.RefundID,
-		To:        StatusProcessing,
-		EventTS:   s.now(),
-		EventType: "processing_started",
-		Provider:  in.Provider,
+		RefundID:    in.RefundID,
+		To:          StatusProcessing,
+		EventTS:     s.now(),
+		EventType:   "processing_started",
+		Provider:    in.Provider,
+		InitiatedBy: InitiatedBySystem,
 	})
 	if err != nil {
 		switch apperror.CodeOf(err) {
@@ -288,6 +290,7 @@ func (s *Service) ProcessRefund(ctx context.Context, in RefundTaskInput) error {
 			EventType:         "refund_" + string(target),
 			Provider:          in.Provider,
 			ProviderRefundRef: refundRefPtr,
+			InitiatedBy:       InitiatedBySystem,
 		}); err != nil {
 			return fmt.Errorf("process refund: apply result: %w", err)
 		}
