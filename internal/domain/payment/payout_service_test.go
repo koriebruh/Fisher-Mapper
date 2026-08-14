@@ -57,6 +57,42 @@ func TestService_CreatePayout_ReturnsPendingAndEnqueuesOutbox(t *testing.T) {
 	}
 }
 
+// TestService_CreatePayout_InvalidCurrency_RejectedBeforePersistOrProviderCall
+// is the payout-flow analogue of the equivalent CreatePayment test: a
+// malformed currency must never reach the provider or leave a payout/outbox
+// row behind.
+func TestService_CreatePayout_InvalidCurrency_RejectedBeforePersistOrProviderCall(t *testing.T) {
+	pool := testPool(t)
+	mockProv := mock.New(mock.Config{Name: "mock"})
+	svc := newTestService(pool, mockProv)
+
+	tenantID := uuid.NewString()
+	key := uuid.NewString()
+	raw := []byte(fmt.Sprintf(`{"tenant_id":%q,"currency":"US","amount":1000,"provider":"mock","destination":"bank_acct_test"}`, tenantID))
+	in := CreatePayoutInput{TenantID: tenantID, Currency: "US", Amount: 1000, Provider: "mock", Destination: "bank_acct_test", Envelope: testEnvelope}
+
+	_, err := svc.CreatePayout(context.Background(), in, key, raw)
+	if err == nil {
+		t.Fatal("CreatePayout with 2-letter currency = nil error, want CodeValidation")
+	}
+	if apperror.CodeOf(err) != apperror.CodeValidation {
+		t.Errorf("CodeOf(err) = %v, want %v", apperror.CodeOf(err), apperror.CodeValidation)
+	}
+	if got := mockProv.CallCounts().Payout; got != 0 {
+		t.Errorf("provider Payout called %d times for an invalid-currency request, want 0", got)
+	}
+
+	var payoutCount int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM payouts WHERE tenant_id = $1`, tenantID,
+	).Scan(&payoutCount); err != nil {
+		t.Fatalf("count payout rows: %v", err)
+	}
+	if payoutCount != 0 {
+		t.Errorf("payout rows persisted for an invalid-currency request = %d, want 0", payoutCount)
+	}
+}
+
 // TestService_CreatePayout_SameKeyAsChargeScope_DoesNotCollide proves
 // ScopePayout is a distinct idempotency namespace: reusing the exact same
 // Idempotency-Key string a charge already completed with must not replay

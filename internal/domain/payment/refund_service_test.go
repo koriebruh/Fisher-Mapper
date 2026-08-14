@@ -79,6 +79,44 @@ func TestService_CreateRefund_SucceedsAndEnqueuesOutbox(t *testing.T) {
 	}
 }
 
+// TestService_CreateRefund_InvalidCurrency_RejectedBeforePersistOrProviderCall
+// is the refund-flow analogue of the equivalent CreatePayment test. A caller
+// that explicitly supplies a malformed currency (rather than omitting it to
+// inherit the parent payment's) must be rejected before the provider is
+// called or a refund/outbox row is written.
+func TestService_CreateRefund_InvalidCurrency_RejectedBeforePersistOrProviderCall(t *testing.T) {
+	pool := testPool(t)
+	mockProv := mock.New(mock.Config{Name: "mock"})
+	svc := newTestService(pool, mockProv)
+
+	paymentID := createSucceededPayment(t, svc, 1000)
+
+	key := uuid.NewString()
+	raw := []byte(`{"currency":"USDD","amount":400}`)
+	_, err := svc.CreateRefund(context.Background(), CreateRefundInput{
+		PaymentID: paymentID, TenantID: uuid.NewString(), Currency: "USDD", Amount: 400, Envelope: testEnvelope,
+	}, key, raw)
+	if err == nil {
+		t.Fatal("CreateRefund with 4-letter currency = nil error, want CodeValidation")
+	}
+	if apperror.CodeOf(err) != apperror.CodeValidation {
+		t.Errorf("CodeOf(err) = %v, want %v", apperror.CodeOf(err), apperror.CodeValidation)
+	}
+	if got := mockProv.CallCounts().Refund; got != 0 {
+		t.Errorf("provider Refund called %d times for an invalid-currency request, want 0", got)
+	}
+
+	var refundCount int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM refunds WHERE payment_id = $1`, paymentID,
+	).Scan(&refundCount); err != nil {
+		t.Fatalf("count refund rows: %v", err)
+	}
+	if refundCount != 0 {
+		t.Errorf("refund rows persisted for an invalid-currency request = %d, want 0", refundCount)
+	}
+}
+
 // TestService_CreateRefund_RejectsWhenPaymentNotSucceeded: a payment still
 // "pending" (never processed) cannot be refunded.
 func TestService_CreateRefund_RejectsWhenPaymentNotSucceeded(t *testing.T) {

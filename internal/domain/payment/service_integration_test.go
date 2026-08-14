@@ -156,6 +156,45 @@ func TestService_CreatePayment_ReturnsPendingAndEnqueuesOutbox(t *testing.T) {
 	}
 }
 
+// TestService_CreatePayment_InvalidCurrency_RejectedBeforePersistOrProviderCall
+// proves ValidateCurrency's service-layer wiring, not just the function in
+// isolation (currency_test.go): a malformed currency must be rejected before
+// the provider is ever called AND before any payment/outbox row exists --
+// the ordering in CreatePayment (ValidateCurrency runs before idempotency
+// reservation and insert) is what this asserts, not merely that the string
+// "usd" fails ValidateCurrency.
+func TestService_CreatePayment_InvalidCurrency_RejectedBeforePersistOrProviderCall(t *testing.T) {
+	pool := testPool(t)
+	mockProv := mock.New(mock.Config{Name: "mock"})
+	svc := newTestService(pool, mockProv)
+
+	tenantID := uuid.NewString()
+	key := uuid.NewString()
+	raw := []byte(fmt.Sprintf(`{"tenant_id":%q,"currency":"usd","amount":1000,"provider":"mock"}`, tenantID))
+	in := CreatePaymentInput{TenantID: tenantID, Currency: "usd", Amount: 1000, Provider: "mock", Envelope: testEnvelope}
+
+	_, err := svc.CreatePayment(context.Background(), in, key, raw)
+	if err == nil {
+		t.Fatal("CreatePayment with lowercase currency = nil error, want CodeValidation")
+	}
+	if apperror.CodeOf(err) != apperror.CodeValidation {
+		t.Errorf("CodeOf(err) = %v, want %v", apperror.CodeOf(err), apperror.CodeValidation)
+	}
+	if got := mockProv.CallCounts().Charge; got != 0 {
+		t.Errorf("provider Charge called %d times for an invalid-currency request, want 0", got)
+	}
+
+	var paymentCount int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM payments WHERE tenant_id = $1`, tenantID,
+	).Scan(&paymentCount); err != nil {
+		t.Fatalf("count payment rows: %v", err)
+	}
+	if paymentCount != 0 {
+		t.Errorf("payment rows persisted for an invalid-currency request = %d, want 0", paymentCount)
+	}
+}
+
 // TestService_ReplayOnSameKeySameBody is Phase 2 validation 2, adjusted for
 // the async flow: hitting create-payment twice with the same
 // Idempotency-Key and body must return the SAME "pending" acknowledgment
