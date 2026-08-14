@@ -653,6 +653,337 @@ func (x *GetRefundResponse) GetStatus() string {
 	return ""
 }
 
+// CreatePayoutRequest has no counterpart-derived fields (unlike
+// CreateRefundRequest): a payout is standalone, so provider/destination are
+// caller-supplied here, not derived server-side from a parent row.
+type CreatePayoutRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	IdempotencyKey string                 `protobuf:"bytes,1,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
+	TenantId       string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Livemode       bool                   `protobuf:"varint,3,opt,name=livemode,proto3" json:"livemode,omitempty"`
+	Currency       string                 `protobuf:"bytes,4,opt,name=currency,proto3" json:"currency,omitempty"`
+	Amount         int64                  `protobuf:"varint,5,opt,name=amount,proto3" json:"amount,omitempty"`
+	Provider       string                 `protobuf:"bytes,6,opt,name=provider,proto3" json:"provider,omitempty"`
+	Destination    string                 `protobuf:"bytes,7,opt,name=destination,proto3" json:"destination,omitempty"`
+	Metadata       map[string]string      `protobuf:"bytes,8,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *CreatePayoutRequest) Reset() {
+	*x = CreatePayoutRequest{}
+	mi := &file_payment_v1_payment_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreatePayoutRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreatePayoutRequest) ProtoMessage() {}
+
+func (x *CreatePayoutRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_payment_v1_payment_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreatePayoutRequest.ProtoReflect.Descriptor instead.
+func (*CreatePayoutRequest) Descriptor() ([]byte, []int) {
+	return file_payment_v1_payment_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *CreatePayoutRequest) GetIdempotencyKey() string {
+	if x != nil {
+		return x.IdempotencyKey
+	}
+	return ""
+}
+
+func (x *CreatePayoutRequest) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *CreatePayoutRequest) GetLivemode() bool {
+	if x != nil {
+		return x.Livemode
+	}
+	return false
+}
+
+func (x *CreatePayoutRequest) GetCurrency() string {
+	if x != nil {
+		return x.Currency
+	}
+	return ""
+}
+
+func (x *CreatePayoutRequest) GetAmount() int64 {
+	if x != nil {
+		return x.Amount
+	}
+	return 0
+}
+
+func (x *CreatePayoutRequest) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *CreatePayoutRequest) GetDestination() string {
+	if x != nil {
+		return x.Destination
+	}
+	return ""
+}
+
+func (x *CreatePayoutRequest) GetMetadata() map[string]string {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
+}
+
+type CreatePayoutResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PayoutId      string                 `protobuf:"bytes,1,opt,name=payout_id,json=payoutId,proto3" json:"payout_id,omitempty"`
+	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	ProviderRef   string                 `protobuf:"bytes,3,opt,name=provider_ref,json=providerRef,proto3" json:"provider_ref,omitempty"`
+	Replayed      bool                   `protobuf:"varint,4,opt,name=replayed,proto3" json:"replayed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CreatePayoutResponse) Reset() {
+	*x = CreatePayoutResponse{}
+	mi := &file_payment_v1_payment_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CreatePayoutResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CreatePayoutResponse) ProtoMessage() {}
+
+func (x *CreatePayoutResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_payment_v1_payment_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CreatePayoutResponse.ProtoReflect.Descriptor instead.
+func (*CreatePayoutResponse) Descriptor() ([]byte, []int) {
+	return file_payment_v1_payment_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *CreatePayoutResponse) GetPayoutId() string {
+	if x != nil {
+		return x.PayoutId
+	}
+	return ""
+}
+
+func (x *CreatePayoutResponse) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *CreatePayoutResponse) GetProviderRef() string {
+	if x != nil {
+		return x.ProviderRef
+	}
+	return ""
+}
+
+func (x *CreatePayoutResponse) GetReplayed() bool {
+	if x != nil {
+		return x.Replayed
+	}
+	return false
+}
+
+type GetPayoutRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PayoutId      string                 `protobuf:"bytes,1,opt,name=payout_id,json=payoutId,proto3" json:"payout_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPayoutRequest) Reset() {
+	*x = GetPayoutRequest{}
+	mi := &file_payment_v1_payment_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPayoutRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPayoutRequest) ProtoMessage() {}
+
+func (x *GetPayoutRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_payment_v1_payment_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPayoutRequest.ProtoReflect.Descriptor instead.
+func (*GetPayoutRequest) Descriptor() ([]byte, []int) {
+	return file_payment_v1_payment_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *GetPayoutRequest) GetPayoutId() string {
+	if x != nil {
+		return x.PayoutId
+	}
+	return ""
+}
+
+type GetPayoutResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PayoutId      string                 `protobuf:"bytes,1,opt,name=payout_id,json=payoutId,proto3" json:"payout_id,omitempty"`
+	TenantId      string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	Livemode      bool                   `protobuf:"varint,3,opt,name=livemode,proto3" json:"livemode,omitempty"`
+	Currency      string                 `protobuf:"bytes,4,opt,name=currency,proto3" json:"currency,omitempty"`
+	Amount        int64                  `protobuf:"varint,5,opt,name=amount,proto3" json:"amount,omitempty"`
+	OperationType string                 `protobuf:"bytes,6,opt,name=operation_type,json=operationType,proto3" json:"operation_type,omitempty"`
+	Provider      string                 `protobuf:"bytes,7,opt,name=provider,proto3" json:"provider,omitempty"`
+	ProviderRef   string                 `protobuf:"bytes,8,opt,name=provider_ref,json=providerRef,proto3" json:"provider_ref,omitempty"`
+	Destination   string                 `protobuf:"bytes,9,opt,name=destination,proto3" json:"destination,omitempty"`
+	Status        string                 `protobuf:"bytes,10,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetPayoutResponse) Reset() {
+	*x = GetPayoutResponse{}
+	mi := &file_payment_v1_payment_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetPayoutResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetPayoutResponse) ProtoMessage() {}
+
+func (x *GetPayoutResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_payment_v1_payment_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetPayoutResponse.ProtoReflect.Descriptor instead.
+func (*GetPayoutResponse) Descriptor() ([]byte, []int) {
+	return file_payment_v1_payment_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *GetPayoutResponse) GetPayoutId() string {
+	if x != nil {
+		return x.PayoutId
+	}
+	return ""
+}
+
+func (x *GetPayoutResponse) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *GetPayoutResponse) GetLivemode() bool {
+	if x != nil {
+		return x.Livemode
+	}
+	return false
+}
+
+func (x *GetPayoutResponse) GetCurrency() string {
+	if x != nil {
+		return x.Currency
+	}
+	return ""
+}
+
+func (x *GetPayoutResponse) GetAmount() int64 {
+	if x != nil {
+		return x.Amount
+	}
+	return 0
+}
+
+func (x *GetPayoutResponse) GetOperationType() string {
+	if x != nil {
+		return x.OperationType
+	}
+	return ""
+}
+
+func (x *GetPayoutResponse) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *GetPayoutResponse) GetProviderRef() string {
+	if x != nil {
+		return x.ProviderRef
+	}
+	return ""
+}
+
+func (x *GetPayoutResponse) GetDestination() string {
+	if x != nil {
+		return x.Destination
+	}
+	return ""
+}
+
+func (x *GetPayoutResponse) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
 var File_payment_v1_payment_proto protoreflect.FileDescriptor
 
 const file_payment_v1_payment_proto_rawDesc = "" +
@@ -717,13 +1048,46 @@ const file_payment_v1_payment_proto_rawDesc = "" +
 	"\fprovider_ref\x18\b \x01(\tR\vproviderRef\x12.\n" +
 	"\x13provider_refund_ref\x18\t \x01(\tR\x11providerRefundRef\x12\x16\n" +
 	"\x06status\x18\n" +
-	" \x01(\tR\x06status2\xd0\x02\n" +
+	" \x01(\tR\x06status\"\xf1\x02\n" +
+	"\x13CreatePayoutRequest\x12'\n" +
+	"\x0fidempotency_key\x18\x01 \x01(\tR\x0eidempotencyKey\x12\x1b\n" +
+	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x1a\n" +
+	"\blivemode\x18\x03 \x01(\bR\blivemode\x12\x1a\n" +
+	"\bcurrency\x18\x04 \x01(\tR\bcurrency\x12\x16\n" +
+	"\x06amount\x18\x05 \x01(\x03R\x06amount\x12\x1a\n" +
+	"\bprovider\x18\x06 \x01(\tR\bprovider\x12 \n" +
+	"\vdestination\x18\a \x01(\tR\vdestination\x12I\n" +
+	"\bmetadata\x18\b \x03(\v2-.payment.v1.CreatePayoutRequest.MetadataEntryR\bmetadata\x1a;\n" +
+	"\rMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8a\x01\n" +
+	"\x14CreatePayoutResponse\x12\x1b\n" +
+	"\tpayout_id\x18\x01 \x01(\tR\bpayoutId\x12\x16\n" +
+	"\x06status\x18\x02 \x01(\tR\x06status\x12!\n" +
+	"\fprovider_ref\x18\x03 \x01(\tR\vproviderRef\x12\x1a\n" +
+	"\breplayed\x18\x04 \x01(\bR\breplayed\"/\n" +
+	"\x10GetPayoutRequest\x12\x1b\n" +
+	"\tpayout_id\x18\x01 \x01(\tR\bpayoutId\"\xbd\x02\n" +
+	"\x11GetPayoutResponse\x12\x1b\n" +
+	"\tpayout_id\x18\x01 \x01(\tR\bpayoutId\x12\x1b\n" +
+	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x1a\n" +
+	"\blivemode\x18\x03 \x01(\bR\blivemode\x12\x1a\n" +
+	"\bcurrency\x18\x04 \x01(\tR\bcurrency\x12\x16\n" +
+	"\x06amount\x18\x05 \x01(\x03R\x06amount\x12%\n" +
+	"\x0eoperation_type\x18\x06 \x01(\tR\roperationType\x12\x1a\n" +
+	"\bprovider\x18\a \x01(\tR\bprovider\x12!\n" +
+	"\fprovider_ref\x18\b \x01(\tR\vproviderRef\x12 \n" +
+	"\vdestination\x18\t \x01(\tR\vdestination\x12\x16\n" +
+	"\x06status\x18\n" +
+	" \x01(\tR\x06status2\xed\x03\n" +
 	"\x0ePaymentService\x12T\n" +
 	"\rCreatePayment\x12 .payment.v1.CreatePaymentRequest\x1a!.payment.v1.CreatePaymentResponse\x12K\n" +
 	"\n" +
 	"GetPayment\x12\x1d.payment.v1.GetPaymentRequest\x1a\x1e.payment.v1.GetPaymentResponse\x12Q\n" +
 	"\fCreateRefund\x12\x1f.payment.v1.CreateRefundRequest\x1a .payment.v1.CreateRefundResponse\x12H\n" +
-	"\tGetRefund\x12\x1c.payment.v1.GetRefundRequest\x1a\x1d.payment.v1.GetRefundResponseB?Z=Fisher-Mapper/internal/transport/grpc/pb/payment/v1;paymentv1b\x06proto3"
+	"\tGetRefund\x12\x1c.payment.v1.GetRefundRequest\x1a\x1d.payment.v1.GetRefundResponse\x12Q\n" +
+	"\fCreatePayout\x12\x1f.payment.v1.CreatePayoutRequest\x1a .payment.v1.CreatePayoutResponse\x12H\n" +
+	"\tGetPayout\x12\x1c.payment.v1.GetPayoutRequest\x1a\x1d.payment.v1.GetPayoutResponseB?Z=Fisher-Mapper/internal/transport/grpc/pb/payment/v1;paymentv1b\x06proto3"
 
 var (
 	file_payment_v1_payment_proto_rawDescOnce sync.Once
@@ -737,7 +1101,7 @@ func file_payment_v1_payment_proto_rawDescGZIP() []byte {
 	return file_payment_v1_payment_proto_rawDescData
 }
 
-var file_payment_v1_payment_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_payment_v1_payment_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_payment_v1_payment_proto_goTypes = []any{
 	(*CreatePaymentRequest)(nil),  // 0: payment.v1.CreatePaymentRequest
 	(*CreatePaymentResponse)(nil), // 1: payment.v1.CreatePaymentResponse
@@ -747,23 +1111,33 @@ var file_payment_v1_payment_proto_goTypes = []any{
 	(*CreateRefundResponse)(nil),  // 5: payment.v1.CreateRefundResponse
 	(*GetRefundRequest)(nil),      // 6: payment.v1.GetRefundRequest
 	(*GetRefundResponse)(nil),     // 7: payment.v1.GetRefundResponse
-	nil,                           // 8: payment.v1.CreatePaymentRequest.MetadataEntry
+	(*CreatePayoutRequest)(nil),   // 8: payment.v1.CreatePayoutRequest
+	(*CreatePayoutResponse)(nil),  // 9: payment.v1.CreatePayoutResponse
+	(*GetPayoutRequest)(nil),      // 10: payment.v1.GetPayoutRequest
+	(*GetPayoutResponse)(nil),     // 11: payment.v1.GetPayoutResponse
+	nil,                           // 12: payment.v1.CreatePaymentRequest.MetadataEntry
+	nil,                           // 13: payment.v1.CreatePayoutRequest.MetadataEntry
 }
 var file_payment_v1_payment_proto_depIdxs = []int32{
-	8, // 0: payment.v1.CreatePaymentRequest.metadata:type_name -> payment.v1.CreatePaymentRequest.MetadataEntry
-	0, // 1: payment.v1.PaymentService.CreatePayment:input_type -> payment.v1.CreatePaymentRequest
-	2, // 2: payment.v1.PaymentService.GetPayment:input_type -> payment.v1.GetPaymentRequest
-	4, // 3: payment.v1.PaymentService.CreateRefund:input_type -> payment.v1.CreateRefundRequest
-	6, // 4: payment.v1.PaymentService.GetRefund:input_type -> payment.v1.GetRefundRequest
-	1, // 5: payment.v1.PaymentService.CreatePayment:output_type -> payment.v1.CreatePaymentResponse
-	3, // 6: payment.v1.PaymentService.GetPayment:output_type -> payment.v1.GetPaymentResponse
-	5, // 7: payment.v1.PaymentService.CreateRefund:output_type -> payment.v1.CreateRefundResponse
-	7, // 8: payment.v1.PaymentService.GetRefund:output_type -> payment.v1.GetRefundResponse
-	5, // [5:9] is the sub-list for method output_type
-	1, // [1:5] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	12, // 0: payment.v1.CreatePaymentRequest.metadata:type_name -> payment.v1.CreatePaymentRequest.MetadataEntry
+	13, // 1: payment.v1.CreatePayoutRequest.metadata:type_name -> payment.v1.CreatePayoutRequest.MetadataEntry
+	0,  // 2: payment.v1.PaymentService.CreatePayment:input_type -> payment.v1.CreatePaymentRequest
+	2,  // 3: payment.v1.PaymentService.GetPayment:input_type -> payment.v1.GetPaymentRequest
+	4,  // 4: payment.v1.PaymentService.CreateRefund:input_type -> payment.v1.CreateRefundRequest
+	6,  // 5: payment.v1.PaymentService.GetRefund:input_type -> payment.v1.GetRefundRequest
+	8,  // 6: payment.v1.PaymentService.CreatePayout:input_type -> payment.v1.CreatePayoutRequest
+	10, // 7: payment.v1.PaymentService.GetPayout:input_type -> payment.v1.GetPayoutRequest
+	1,  // 8: payment.v1.PaymentService.CreatePayment:output_type -> payment.v1.CreatePaymentResponse
+	3,  // 9: payment.v1.PaymentService.GetPayment:output_type -> payment.v1.GetPaymentResponse
+	5,  // 10: payment.v1.PaymentService.CreateRefund:output_type -> payment.v1.CreateRefundResponse
+	7,  // 11: payment.v1.PaymentService.GetRefund:output_type -> payment.v1.GetRefundResponse
+	9,  // 12: payment.v1.PaymentService.CreatePayout:output_type -> payment.v1.CreatePayoutResponse
+	11, // 13: payment.v1.PaymentService.GetPayout:output_type -> payment.v1.GetPayoutResponse
+	8,  // [8:14] is the sub-list for method output_type
+	2,  // [2:8] is the sub-list for method input_type
+	2,  // [2:2] is the sub-list for extension type_name
+	2,  // [2:2] is the sub-list for extension extendee
+	0,  // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_payment_v1_payment_proto_init() }
@@ -777,7 +1151,7 @@ func file_payment_v1_payment_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_payment_v1_payment_proto_rawDesc), len(file_payment_v1_payment_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

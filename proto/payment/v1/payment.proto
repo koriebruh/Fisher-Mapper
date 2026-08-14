@@ -29,6 +29,14 @@ service PaymentService {
 
   // GetRefund mirrors REST's GET /payments/refunds/{id}.
   rpc GetRefund(GetRefundRequest) returns (GetRefundResponse);
+
+  // CreatePayout mirrors REST's POST /payouts: a standalone money-OUT
+  // operation, independent of any prior charge (unlike CreateRefund). Async
+  // by construction, same as CreatePayment/CreateRefund.
+  rpc CreatePayout(CreatePayoutRequest) returns (CreatePayoutResponse);
+
+  // GetPayout mirrors REST's GET /payouts/{id}.
+  rpc GetPayout(GetPayoutRequest) returns (GetPayoutResponse);
 }
 
 // CreatePaymentRequest mirrors REST's createPaymentRequest body plus the
@@ -109,5 +117,43 @@ message GetRefundResponse {
   string provider = 7;
   string provider_ref = 8;
   string provider_refund_ref = 9;
+  string status = 10;
+}
+
+// CreatePayoutRequest has no counterpart-derived fields (unlike
+// CreateRefundRequest): a payout is standalone, so provider/destination are
+// caller-supplied here, not derived server-side from a parent row.
+message CreatePayoutRequest {
+  string idempotency_key = 1;
+  string tenant_id = 2;
+  bool livemode = 3;
+  string currency = 4;
+  int64 amount = 5;
+  string provider = 6;
+  string destination = 7;
+  map<string, string> metadata = 8;
+}
+
+message CreatePayoutResponse {
+  string payout_id = 1;
+  string status = 2;
+  string provider_ref = 3;
+  bool replayed = 4;
+}
+
+message GetPayoutRequest {
+  string payout_id = 1;
+}
+
+message GetPayoutResponse {
+  string payout_id = 1;
+  string tenant_id = 2;
+  bool livemode = 3;
+  string currency = 4;
+  int64 amount = 5;
+  string operation_type = 6;
+  string provider = 7;
+  string provider_ref = 8;
+  string destination = 9;
   string status = 10;
 }

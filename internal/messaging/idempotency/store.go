@@ -42,13 +42,16 @@ const (
 	StateConflict
 )
 
-// ScopeCharge and ScopeRefund are the two idempotency scopes Fase 4
-// distinguishes. Declared here (not in package payment) so this package's
-// call sites are self-documenting without importing payment for a string
-// constant.
+// ScopeCharge, ScopeRefund and ScopePayout are the idempotency scopes this
+// template distinguishes. Declared here (not in package payment) so this
+// package's call sites are self-documenting without importing payment for a
+// string constant. ScopePayout mirrors ScopeRefund's reasoning: a tenant
+// reusing the same key string across a charge/refund/payout must never
+// collide across operation types.
 const (
 	ScopeCharge = "charge"
 	ScopeRefund = "refund"
+	ScopePayout = "payout"
 )
 
 type Record struct {

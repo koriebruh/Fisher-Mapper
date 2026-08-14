@@ -47,10 +47,14 @@ type Config struct {
 	GetStatusCurrencyOverride string
 }
 
-// chargeRecord is what Charge remembers about a providerRef, so GetStatus
-// can report the SAME amount/currency a reconciliation caller must verify
-// against — a mock that always echoed back whatever amount the caller
-// asked about would never be able to exercise a real mismatch check.
+// chargeRecord is what Charge (and Payout) remember about a providerRef, so
+// GetStatus can report the SAME amount/currency a reconciliation caller must
+// verify against — a mock that always echoed back whatever amount the
+// caller asked about would never be able to exercise a real mismatch check.
+// Shared across both operation types (keyed by providerRef, which already
+// carries a "chg_"/"pyot_" prefix so the two never collide) rather than a
+// second map, since GetStatus itself has no notion of "which operation type
+// created this ref" -- a real PJP's status endpoint doesn't either.
 type chargeRecord struct {
 	amount   int64
 	currency string
@@ -66,6 +70,7 @@ type Mock struct {
 	captureCalls int
 	statusCalls  int
 	refundCalls  int
+	payoutCalls  int
 	webhookCalls int
 	charges      map[string]chargeRecord
 }
@@ -256,6 +261,29 @@ func (m *Mock) Refund(ctx context.Context, req provider.RefundRequest) (provider
 	}, nil
 }
 
+func (m *Mock) Payout(ctx context.Context, req provider.PayoutRequest) (provider.PayoutResponse, error) {
+	m.mu.Lock()
+	m.payoutCalls++
+	m.mu.Unlock()
+
+	if err := m.wait(ctx); err != nil {
+		return provider.PayoutResponse{}, err
+	}
+	if m.cfg.ForceError != nil {
+		return provider.PayoutResponse{}, m.cfg.ForceError
+	}
+
+	ref := providerRef("pyot", req.IdempotencyKey)
+	m.mu.Lock()
+	m.charges[ref] = chargeRecord{amount: req.Amount, currency: req.Currency}
+	m.mu.Unlock()
+	return provider.PayoutResponse{
+		ProviderRef: ref,
+		Status:      m.cfg.Status,
+		RawResponse: rawResponse(map[string]any{"provider_ref": ref, "status": m.cfg.Status}),
+	}, nil
+}
+
 // mockWebhookPayload is the JSON shape ParseWebhook expects — a stand-in
 // for whatever wire format a real PJP would use.
 type mockWebhookPayload struct {
@@ -302,6 +330,7 @@ type CallCounts struct {
 	Charge    int
 	GetStatus int
 	Refund    int
+	Payout    int
 	Webhook   int
 }
 
@@ -314,6 +343,7 @@ func (m *Mock) CallCounts() CallCounts {
 		Charge:    m.chargeCalls,
 		GetStatus: m.statusCalls,
 		Refund:    m.refundCalls,
+		Payout:    m.payoutCalls,
 		Webhook:   m.webhookCalls,
 	}
 }

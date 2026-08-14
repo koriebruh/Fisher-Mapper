@@ -220,6 +220,9 @@ func (s *Service) CreatePayment(ctx context.Context, in CreatePaymentInput, idem
 	if in.TenantID == "" || in.Currency == "" || in.Provider == "" || in.Amount <= 0 {
 		return CreatePaymentOutput{}, apperror.New(apperror.CodeValidation, "tenant_id, currency, provider and a positive amount are required")
 	}
+	if err := ValidateCurrency(in.Currency); err != nil {
+		return CreatePaymentOutput{}, err
+	}
 
 	fingerprint := fingerprintOf(rawBody)
 

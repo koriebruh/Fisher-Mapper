@@ -82,6 +82,16 @@ func (s *Service) CreateRefund(ctx context.Context, in CreateRefundInput, idempo
 	if in.PaymentID == uuid.Nil || in.TenantID == "" || in.Amount <= 0 {
 		return CreateRefundOutput{}, apperror.New(apperror.CodeValidation, "payment_id, tenant_id and a positive amount are required")
 	}
+	// Currency is validated only when the caller actually supplied one --
+	// CreateRefundWithOutbox derives it from the locked parent payment when
+	// omitted (the common case: REST/gRPC callers usually don't repeat the
+	// original payment's currency), so an empty string here is not garbage
+	// input, it's "use the parent's".
+	if in.Currency != "" {
+		if err := ValidateCurrency(in.Currency); err != nil {
+			return CreateRefundOutput{}, err
+		}
+	}
 
 	fingerprint := fingerprintOf(rawBody)
 

@@ -133,6 +133,101 @@ func (s *Service) ReconcilePayment(ctx context.Context, p *Payment) error {
 	return nil
 }
 
+// ListStuckPayouts is the payout analogue of ListStuckProcessing -- the
+// reconciliation job's "poll processing stuck past some threshold" step,
+// applied to payouts instead of payments. Payouts need the identical
+// reconciliation sweep charges get: a stuck payout is exactly as dangerous
+// left unresolved (money out, unknown outcome) as a stuck charge.
+func (s *Service) ListStuckPayouts(ctx context.Context, threshold time.Duration) ([]*Payout, error) {
+	pr, err := s.payoutRepo()
+	if err != nil {
+		return nil, err
+	}
+	cutoff := s.now().Add(-threshold)
+	return pr.ListPayoutsProcessingOlderThan(ctx, cutoff)
+}
+
+// ReconcilePayout resolves ONE stuck-processing payout via provider.GetStatus,
+// mirroring ReconcilePayment's shape exactly (webhook staging join is
+// skipped -- payouts have no webhook-before-commit case documented in the
+// plan, since nothing else references a payout by provider_ref before it
+// exists): verify amount+currency against the stored payout before applying
+// any transition (the same money invariant plan Decide Now item 11
+// requires for charges), never trusting GetStatus blindly.
+//
+// A payout stuck "processing" with no provider_ref (never actually called --
+// e.g. disabled between the outbox dispatch and the worker's second check,
+// or the circuit breaker was open) has nothing for GetStatus to query,
+// exactly like the equivalent payment case -- same documented, known gap.
+func (s *Service) ReconcilePayout(ctx context.Context, p *Payout) error {
+	pr, err := s.payoutRepo()
+	if err != nil {
+		return err
+	}
+
+	prov, err := s.providers.Get(p.Provider)
+	if err != nil {
+		return fmt.Errorf("reconcile payout %s: %w", p.ID, err)
+	}
+
+	fresh, err := pr.GetPayout(ctx, p.ID)
+	if err != nil {
+		return fmt.Errorf("reconcile payout %s: re-fetch: %w", p.ID, err)
+	}
+	if IsTerminal(fresh.Status) {
+		return nil
+	}
+	if fresh.ProviderRef == nil {
+		slog.Warn("reconcile payout: stuck processing with no provider_ref, cannot query GetStatus (known gap)",
+			"layer", "reconciliation", "payout_id", p.ID)
+		return nil
+	}
+
+	statusResp, err := prov.GetStatus(ctx, provider.GetStatusRequest{ProviderRef: *fresh.ProviderRef})
+	if err != nil {
+		slog.Warn("reconcile payout: GetStatus failed, will retry next cycle",
+			"layer", "reconciliation", "source", apperror.SourceProvider, "error", err, "payout_id", p.ID)
+		return nil
+	}
+
+	var target Status
+	switch statusResp.Status {
+	case provider.StatusSucceeded:
+		target = StatusSucceeded
+	case provider.StatusFailed:
+		target = StatusFailed
+	default:
+		return nil
+	}
+
+	if statusResp.Amount != fresh.Amount || statusResp.Currency != fresh.Currency {
+		slog.Error("reconciliation mismatch: GetStatus amount/currency does not match stored payout, refusing to apply",
+			"layer", "reconciliation", "payout_id", p.ID,
+			"stored_amount", fresh.Amount, "stored_currency", fresh.Currency,
+			"provider_amount", statusResp.Amount, "provider_currency", statusResp.Currency)
+		if s.onReconciliationMismatch != nil {
+			s.onReconciliationMismatch(ctx)
+		}
+		return nil
+	}
+
+	if err := pr.ApplyPayoutTransition(ctx, PayoutTransitionParams{
+		PayoutID:  fresh.ID,
+		To:        target,
+		EventTS:   s.now(),
+		EventType: "reconciliation_" + string(target),
+		Provider:  fresh.Provider,
+	}); err != nil {
+		switch apperror.CodeOf(err) {
+		case apperror.CodeInvalidTransition, apperror.CodeTerminalState, apperror.CodeStaleEvent:
+			return nil
+		default:
+			return fmt.Errorf("reconcile payout %s: apply transition: %w", fresh.ID, err)
+		}
+	}
+	return nil
+}
+
 // SweepStagedWebhooks re-attempts webhook.Join for every (provider,
 // provider_ref) pair still carrying unprocessed staged events — the "sweep
 // webhook events staged with no provider_ref match yet" gap the Fase 3

@@ -12,15 +12,17 @@ import (
 )
 
 // providerCarryingTaskTypes are the outbox task types whose payload has a
-// "provider" JSON field the Fase 4 provider-enabled check can read -- both
-// charge and refund tasks (queue.TaskTypeCharge / queue.TaskTypeRefund)
-// carry one (see payment.ChargeTaskInput / payment.RefundTaskInput). Kept
-// as a set here, rather than importing package payment for the struct
-// shape, to avoid an outbox<->payment import cycle (payment already
-// imports outbox to build these very rows).
+// "provider" JSON field the Fase 4 provider-enabled check can read -- charge,
+// refund and payout tasks (queue.TaskTypeCharge / queue.TaskTypeRefund /
+// queue.TaskTypePayout) all carry one (see payment.ChargeTaskInput /
+// payment.RefundTaskInput / payment.PayoutTaskInput). Kept as a set here,
+// rather than importing package payment for the struct shape, to avoid an
+// outbox<->payment import cycle (payment already imports outbox to build
+// these very rows).
 var providerCarryingTaskTypes = map[string]bool{
 	queue.TaskTypeCharge: true,
 	queue.TaskTypeRefund: true,
+	queue.TaskTypePayout: true,
 }
 
 // providerCarrier is the minimal shape shared by ChargeTaskInput and
@@ -155,11 +157,11 @@ func (r *Relay) backoff(current time.Duration) time.Duration {
 }
 
 // dispatchOne is the per-row dispatch callback DispatchBatch invokes,
-// deciding EnqueueOptions from the row's task type: TaskTypeCharge and
-// TaskTypeRefund both get MaxRetry(0) (plan: "charge task no-auto-retry,
-// task lain retry normal" -- refund carries the identical double-provider-
-// call risk, per the Fase 4 task instructions, so it gets the same
-// treatment), everything else keeps the queue's default retry behavior. It
+// deciding EnqueueOptions from the row's task type: TaskTypeCharge,
+// TaskTypeRefund and TaskTypePayout all get MaxRetry(0) (plan: "charge task
+// no-auto-retry, task lain retry normal" -- refund and payout carry the
+// identical double-provider-call risk, so they get the same treatment),
+// everything else keeps the queue's default retry behavior. It
 // never calls a provider -- see the invariant documented in store.go's
 // package doc and in payment.Service.ProcessCharge/ProcessRefund.
 //
@@ -183,7 +185,7 @@ func (r *Relay) dispatchOne(ctx context.Context, row Row) error {
 	}
 
 	opts := queue.EnqueueOptions{TaskID: row.ID.String()}
-	if row.TaskType == queue.TaskTypeCharge || row.TaskType == queue.TaskTypeRefund {
+	if row.TaskType == queue.TaskTypeCharge || row.TaskType == queue.TaskTypeRefund || row.TaskType == queue.TaskTypePayout {
 		zero := 0
 		opts.MaxRetry = &zero
 	}

@@ -23,6 +23,12 @@ type service interface {
 	ListStuckProcessing(ctx context.Context, threshold time.Duration) ([]*payment.Payment, error)
 	ReconcilePayment(ctx context.Context, p *payment.Payment) error
 	SweepStagedWebhooks(ctx context.Context) (int, error)
+
+	// ListStuckPayouts/ReconcilePayout mirror the payment methods above,
+	// applied to payouts: money OUT needs the identical stuck-processing
+	// sweep money IN gets, not just documentation of the gap.
+	ListStuckPayouts(ctx context.Context, threshold time.Duration) ([]*payment.Payout, error)
+	ReconcilePayout(ctx context.Context, p *payment.Payout) error
 }
 
 // Job periodically:
@@ -100,11 +106,11 @@ func (j *Job) runOnce(ctx context.Context) {
 
 	stuck, err := j.service.ListStuckProcessing(ctx, j.threshold)
 	if err != nil {
-		slog.Error("reconciliation: list stuck processing", "error", err)
+		slog.Error("reconciliation: list stuck processing", "layer", "reconciliation", "error", err)
 	} else {
 		for _, p := range stuck {
 			if err := j.service.ReconcilePayment(ctx, p); err != nil {
-				slog.Error("reconciliation: resolve payment", "error", err, "payment_id", p.ID)
+				slog.Error("reconciliation: resolve payment", "layer", "reconciliation", "error", err, "payment_id", p.ID)
 			}
 		}
 		if len(stuck) > 0 {
@@ -112,8 +118,22 @@ func (j *Job) runOnce(ctx context.Context) {
 		}
 	}
 
+	stuckPayouts, err := j.service.ListStuckPayouts(ctx, j.threshold)
+	if err != nil {
+		slog.Error("reconciliation: list stuck payouts", "layer", "reconciliation", "error", err)
+	} else {
+		for _, p := range stuckPayouts {
+			if err := j.service.ReconcilePayout(ctx, p); err != nil {
+				slog.Error("reconciliation: resolve payout", "layer", "reconciliation", "error", err, "payout_id", p.ID)
+			}
+		}
+		if len(stuckPayouts) > 0 {
+			slog.Info("reconciliation: pass complete", "stuck_payouts_seen", len(stuckPayouts))
+		}
+	}
+
 	if matched, err := j.service.SweepStagedWebhooks(ctx); err != nil {
-		slog.Error("reconciliation: sweep staged webhooks", "error", err)
+		slog.Error("reconciliation: sweep staged webhooks", "layer", "reconciliation", "error", err)
 	} else if matched > 0 {
 		slog.Info("reconciliation: staged webhook sweep matched payments", "count", matched)
 	}

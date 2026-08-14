@@ -23,6 +23,8 @@ const (
 	PaymentService_GetPayment_FullMethodName    = "/payment.v1.PaymentService/GetPayment"
 	PaymentService_CreateRefund_FullMethodName  = "/payment.v1.PaymentService/CreateRefund"
 	PaymentService_GetRefund_FullMethodName     = "/payment.v1.PaymentService/GetRefund"
+	PaymentService_CreatePayout_FullMethodName  = "/payment.v1.PaymentService/CreatePayout"
+	PaymentService_GetPayout_FullMethodName     = "/payment.v1.PaymentService/GetPayout"
 )
 
 // PaymentServiceClient is the client API for PaymentService service.
@@ -51,6 +53,12 @@ type PaymentServiceClient interface {
 	CreateRefund(ctx context.Context, in *CreateRefundRequest, opts ...grpc.CallOption) (*CreateRefundResponse, error)
 	// GetRefund mirrors REST's GET /payments/refunds/{id}.
 	GetRefund(ctx context.Context, in *GetRefundRequest, opts ...grpc.CallOption) (*GetRefundResponse, error)
+	// CreatePayout mirrors REST's POST /payouts: a standalone money-OUT
+	// operation, independent of any prior charge (unlike CreateRefund). Async
+	// by construction, same as CreatePayment/CreateRefund.
+	CreatePayout(ctx context.Context, in *CreatePayoutRequest, opts ...grpc.CallOption) (*CreatePayoutResponse, error)
+	// GetPayout mirrors REST's GET /payouts/{id}.
+	GetPayout(ctx context.Context, in *GetPayoutRequest, opts ...grpc.CallOption) (*GetPayoutResponse, error)
 }
 
 type paymentServiceClient struct {
@@ -101,6 +109,26 @@ func (c *paymentServiceClient) GetRefund(ctx context.Context, in *GetRefundReque
 	return out, nil
 }
 
+func (c *paymentServiceClient) CreatePayout(ctx context.Context, in *CreatePayoutRequest, opts ...grpc.CallOption) (*CreatePayoutResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreatePayoutResponse)
+	err := c.cc.Invoke(ctx, PaymentService_CreatePayout_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *paymentServiceClient) GetPayout(ctx context.Context, in *GetPayoutRequest, opts ...grpc.CallOption) (*GetPayoutResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPayoutResponse)
+	err := c.cc.Invoke(ctx, PaymentService_GetPayout_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PaymentServiceServer is the server API for PaymentService service.
 // All implementations must embed UnimplementedPaymentServiceServer
 // for forward compatibility.
@@ -127,6 +155,12 @@ type PaymentServiceServer interface {
 	CreateRefund(context.Context, *CreateRefundRequest) (*CreateRefundResponse, error)
 	// GetRefund mirrors REST's GET /payments/refunds/{id}.
 	GetRefund(context.Context, *GetRefundRequest) (*GetRefundResponse, error)
+	// CreatePayout mirrors REST's POST /payouts: a standalone money-OUT
+	// operation, independent of any prior charge (unlike CreateRefund). Async
+	// by construction, same as CreatePayment/CreateRefund.
+	CreatePayout(context.Context, *CreatePayoutRequest) (*CreatePayoutResponse, error)
+	// GetPayout mirrors REST's GET /payouts/{id}.
+	GetPayout(context.Context, *GetPayoutRequest) (*GetPayoutResponse, error)
 	mustEmbedUnimplementedPaymentServiceServer()
 }
 
@@ -148,6 +182,12 @@ func (UnimplementedPaymentServiceServer) CreateRefund(context.Context, *CreateRe
 }
 func (UnimplementedPaymentServiceServer) GetRefund(context.Context, *GetRefundRequest) (*GetRefundResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetRefund not implemented")
+}
+func (UnimplementedPaymentServiceServer) CreatePayout(context.Context, *CreatePayoutRequest) (*CreatePayoutResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreatePayout not implemented")
+}
+func (UnimplementedPaymentServiceServer) GetPayout(context.Context, *GetPayoutRequest) (*GetPayoutResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetPayout not implemented")
 }
 func (UnimplementedPaymentServiceServer) mustEmbedUnimplementedPaymentServiceServer() {}
 func (UnimplementedPaymentServiceServer) testEmbeddedByValue()                        {}
@@ -242,6 +282,42 @@ func _PaymentService_GetRefund_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PaymentService_CreatePayout_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreatePayoutRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentServiceServer).CreatePayout(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentService_CreatePayout_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentServiceServer).CreatePayout(ctx, req.(*CreatePayoutRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PaymentService_GetPayout_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPayoutRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PaymentServiceServer).GetPayout(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PaymentService_GetPayout_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PaymentServiceServer).GetPayout(ctx, req.(*GetPayoutRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PaymentService_ServiceDesc is the grpc.ServiceDesc for PaymentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -264,6 +340,14 @@ var PaymentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetRefund",
 			Handler:    _PaymentService_GetRefund_Handler,
+		},
+		{
+			MethodName: "CreatePayout",
+			Handler:    _PaymentService_CreatePayout_Handler,
+		},
+		{
+			MethodName: "GetPayout",
+			Handler:    _PaymentService_GetPayout_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

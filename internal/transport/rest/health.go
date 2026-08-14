@@ -86,6 +86,15 @@ func NewApp(deps Deps) *fiber.App {
 		}
 		RegisterPaymentRoutes(paymentGroup, PaymentDeps{Service: deps.PaymentService})
 		RegisterRefundRoutes(paymentGroup, PaymentDeps{Service: deps.PaymentService})
+
+		// payouts is its own top-level group (not a /payments sub-route):
+		// unlike a refund, a payout is standalone -- it has no parent payment
+		// id to hang a URL off of.
+		payoutGroup := app.Group("/payouts")
+		if deps.RateLimiter != nil {
+			payoutGroup.Use(ratelimit.Middleware(deps.RateLimiter, nil, deps.RateLimitEnabled))
+		}
+		RegisterPayoutRoutes(payoutGroup, PaymentDeps{Service: deps.PaymentService})
 	}
 
 	if deps.PaymentService != nil && deps.Providers != nil && deps.Verifiers != nil && deps.WebhookStore != nil {

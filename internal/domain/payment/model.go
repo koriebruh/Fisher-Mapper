@@ -65,3 +65,25 @@ type Refund struct {
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 }
+
+// Payout is the domain aggregate backing the `payouts` table: money OUT,
+// standalone -- independent of any prior charge, unlike Refund. Its own
+// state machine instance runs through the identical pending->processing->
+// succeeded|failed graph (Transition, statemachine.go).
+type Payout struct {
+	ID          uuid.UUID
+	TenantID    string
+	Livemode    bool
+	Currency    string
+	Amount      int64
+	Provider    string
+	ProviderRef *string // the reference THIS provider assigns to the payout call itself
+	// Destination is an opaque identifier for where the funds go (a
+	// provider-side bank-account/e-wallet token, never raw bank/card
+	// account data) -- see provider.PayoutRequest.Destination.
+	Destination string
+	Status      Status
+	LastEventAt time.Time
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}

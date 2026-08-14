@@ -84,6 +84,29 @@ const (
 	CodeInternal Code = "internal"
 )
 
+// Source categorizes WHO is responsible for an error, for structured
+// logging: a human reading an incident log line must be able to tell "is
+// this our bug, a bad caller request, or the PJP/an upstream dependency
+// misbehaving" without reading source code. See SourceOf.
+type Source string
+
+const (
+	// SourceClient: the caller sent a bad request (validation failure,
+	// idempotency conflict/replay race, referencing something that does not
+	// exist, a state transition the caller asked for that isn't valid).
+	SourceClient Source = "client"
+
+	// SourceInternal: a bug or bad state in THIS codebase (misconfiguration,
+	// an invariant this template itself is supposed to guarantee having
+	// been violated, an unexpected DB write failure).
+	SourceInternal Source = "internal"
+
+	// SourceProvider: the PJP (or an inbound event it sent) is the root
+	// cause -- a timeout/5xx talking to the provider, or a webhook event
+	// whose timing/dedup this template correctly rejected.
+	SourceProvider Source = "provider"
+)
+
 // Error is the concrete error type carrying a Code plus a human-readable
 // message and, optionally, a wrapped cause.
 type Error struct {
@@ -123,4 +146,51 @@ func CodeOf(err error) Code {
 		return appErr.Code
 	}
 	return CodeInternal
+}
+
+// sourceByCode is the fixed Code -> Source mapping SourceOf reads. Codes not
+// listed default to SourceInternal (see SourceOf) -- the safe default for
+// "something this template doesn't have a specific taxonomy entry for yet",
+// consistent with CodeOf's own CodeInternal fallback for a plain (non
+// apperror) wrapped error, e.g. a raw pgx/DB failure that was never given
+// its own Code.
+var sourceByCode = map[Code]Source{
+	CodeValidation:            SourceClient,
+	CodeIdempotencyConflict:   SourceClient,
+	CodeIdempotencyInProgress: SourceClient,
+	CodeNotFound:              SourceClient,
+	CodeRefundLimitExceeded:   SourceClient,
+	CodeUnauthorized:          SourceClient,
+	CodeInvalidTransition:     SourceClient,
+	CodeTerminalState:         SourceClient,
+
+	CodeProviderTimeout: SourceProvider,
+	CodeProviderError:   SourceProvider,
+	// Dedup/staleness rejections are driven by provider-event timing
+	// (webhook redelivery, out-of-order delivery), not a caller mistake or
+	// a bug in this codebase.
+	CodeDuplicateEvent: SourceProvider,
+	CodeStaleEvent:     SourceProvider,
+
+	// Both of these are OUR configuration/registration state, not the
+	// PJP's fault -- an unregistered provider name or a dynamic-config
+	// provider-enabled=false is a decision made in this deployment.
+	CodeProviderNotRegistered: SourceInternal,
+	CodeProviderDisabled:      SourceInternal,
+	CodeInternal:              SourceInternal,
+}
+
+// SourceOf reports code's Source per sourceByCode, defaulting to
+// SourceInternal for any Code not explicitly listed there (including a
+// plain wrapped error CodeOf already resolved to CodeInternal). Call sites
+// logging an error should include this as a structured attribute (e.g.
+// `"source", apperror.SourceOf(apperror.CodeOf(err))`) alongside a
+// `"layer"` attribute identifying which architectural layer logged it, so
+// an incident reader can tell "our bug vs. bad input vs. the PJP" without
+// reading code.
+func SourceOf(code Code) Source {
+	if src, ok := sourceByCode[code]; ok {
+		return src
+	}
+	return SourceInternal
 }

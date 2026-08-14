@@ -231,6 +231,14 @@ func run_() error {
 		return paymentService.ProcessRefund(ctx, in)
 	}
 
+	payoutHandler := func(ctx context.Context, payload []byte) error {
+		var in payment.PayoutTaskInput
+		if err := json.Unmarshal(payload, &in); err != nil {
+			return fmt.Errorf("worker: unmarshal payout task payload: %w", err)
+		}
+		return paymentService.ProcessPayout(ctx, in)
+	}
+
 	// Queue: durable asynq client + non-durable memory fallback, switching
 	// on live Redis health (not just a boot-time check) -- validations 1
 	// and 3.
@@ -242,6 +250,9 @@ func run_() error {
 	})
 	memoryClient.RegisterHandler(queue.TaskTypeRefund, func(ctx context.Context, _ string, payload []byte) error {
 		return refundHandler(ctx, payload)
+	})
+	memoryClient.RegisterHandler(queue.TaskTypePayout, func(ctx context.Context, _ string, payload []byte) error {
+		return payoutHandler(ctx, payload)
 	})
 
 	asynqClient := queue.NewAsynqClient(cfg.Redis.Addr)
@@ -279,6 +290,9 @@ func run_() error {
 	})
 	mux.HandleFunc(queue.TaskTypeRefund, func(ctx context.Context, task *asynq.Task) error {
 		return refundHandler(ctx, task.Payload())
+	})
+	mux.HandleFunc(queue.TaskTypePayout, func(ctx context.Context, task *asynq.Task) error {
+		return payoutHandler(ctx, task.Payload())
 	})
 
 	// Fase 4 reconciliation job: polls payments stuck "processing" past

@@ -33,6 +33,13 @@ const TaskTypeCharge = "charge"
 // so it gets the same MaxRetry(0) treatment in outbox.Relay.dispatchOne.
 const TaskTypeRefund = "refund"
 
+// TaskTypePayout identifies the "process payout" task: a provider call that
+// disburses money OUT, standalone (not tied to an existing charge). Subject
+// to the identical no-auto-retry invariant as charge/refund -- a redelivered
+// payout task must never call the provider a second time, or it becomes a
+// double disbursement.
+const TaskTypePayout = "payout"
+
 // EnqueueOptions carries the per-dispatch options a Client.Enqueue call
 // needs. MaxRetry, when non-nil, overrides the queue's default retry count
 // for this one task -- the relay sets it to 0 for TaskTypeCharge and leaves

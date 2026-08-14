@@ -181,3 +181,64 @@ func (s *Server) GetRefund(ctx context.Context, req *pb.GetRefundRequest) (*pb.G
 	}
 	return resp, nil
 }
+
+// CreatePayout mirrors rest.handleCreatePayout: a standalone money-OUT
+// operation, so (unlike CreateRefund) there is no parent row to fetch first
+// -- provider/destination come straight from the request.
+func (s *Server) CreatePayout(ctx context.Context, req *pb.CreatePayoutRequest) (*pb.CreatePayoutResponse, error) {
+	in := payment.CreatePayoutInput{
+		TenantID:    req.GetTenantId(),
+		Livemode:    req.GetLivemode(),
+		Currency:    req.GetCurrency(),
+		Amount:      req.GetAmount(),
+		Provider:    req.GetProvider(),
+		Destination: req.GetDestination(),
+		Metadata:    req.GetMetadata(),
+	}
+
+	raw, err := fingerprintBasis(in)
+	if err != nil {
+		return nil, statusFromError(apperror.Wrap(apperror.CodeInternal, "grpc: marshal fingerprint basis", err))
+	}
+
+	out, err := s.service.CreatePayout(ctx, in, req.GetIdempotencyKey(), raw)
+	if err != nil {
+		return nil, statusFromError(err)
+	}
+
+	return &pb.CreatePayoutResponse{
+		PayoutId: out.PayoutID.String(),
+		Status:   string(out.Status),
+		Replayed: out.Replayed,
+	}, nil
+}
+
+// GetPayout mirrors rest.handleGetPayout, returning the full row (same
+// reasoning as GetPayment/GetRefund's doc).
+func (s *Server) GetPayout(ctx context.Context, req *pb.GetPayoutRequest) (*pb.GetPayoutResponse, error) {
+	id, err := uuid.Parse(req.GetPayoutId())
+	if err != nil {
+		return nil, statusFromError(apperror.New(apperror.CodeValidation, "invalid payout id"))
+	}
+
+	p, err := s.service.GetPayout(ctx, id)
+	if err != nil {
+		return nil, statusFromError(err)
+	}
+
+	resp := &pb.GetPayoutResponse{
+		PayoutId:      p.ID.String(),
+		TenantId:      p.TenantID,
+		Livemode:      p.Livemode,
+		Currency:      p.Currency,
+		Amount:        p.Amount,
+		OperationType: string(payment.OperationPayout),
+		Provider:      p.Provider,
+		Destination:   p.Destination,
+		Status:        string(p.Status),
+	}
+	if p.ProviderRef != nil {
+		resp.ProviderRef = *p.ProviderRef
+	}
+	return resp, nil
+}
