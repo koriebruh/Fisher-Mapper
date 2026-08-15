@@ -1,6 +1,8 @@
 package rest
 
 import (
+	"crypto/subtle"
+
 	"github.com/gofiber/fiber/v2"
 
 	"Fisher-Mapper/internal/domain/apperror"
@@ -26,7 +28,8 @@ type AdminDeps struct {
 // permission system" framing.
 func adminAuth(apiKey string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		if apiKey == "" || c.Get("X-Admin-Key") != apiKey {
+		given := c.Get("X-Admin-Key")
+		if apiKey == "" || len(given) != len(apiKey) || subtle.ConstantTimeCompare([]byte(given), []byte(apiKey)) != 1 {
 			return writeError(c, apperror.New(apperror.CodeUnauthorized, "admin: missing or invalid X-Admin-Key header"))
 		}
 		return c.Next()
