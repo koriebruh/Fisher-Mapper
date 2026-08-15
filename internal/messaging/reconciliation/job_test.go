@@ -16,6 +16,7 @@ type fakeService struct {
 	listCalls        int
 	sweepCalls       int
 	listPayoutsCalls int
+	listRefundsCalls int
 }
 
 func (f *fakeService) ListStuckProcessing(context.Context, time.Duration) ([]*payment.Payment, error) {
@@ -41,6 +42,15 @@ func (f *fakeService) ReconcilePayout(context.Context, *payment.Payout) error {
 	return nil
 }
 
+func (f *fakeService) ListStuckRefunds(context.Context, time.Duration) ([]*payment.Refund, error) {
+	f.listRefundsCalls++
+	return nil, nil
+}
+
+func (f *fakeService) ReconcileRefund(context.Context, *payment.Refund) error {
+	return nil
+}
+
 // TestJob_RunOnce_EnabledNilRunsAsNormal proves the backward-compatible
 // default (no WithEnabledCheck call at all, same as before the toggle
 // existed): the job does its work.
@@ -50,8 +60,8 @@ func TestJob_RunOnce_EnabledNilRunsAsNormal(t *testing.T) {
 
 	j.RunOnce(context.Background())
 
-	if fake.listCalls != 1 || fake.sweepCalls != 1 || fake.listPayoutsCalls != 1 {
-		t.Errorf("listCalls=%d sweepCalls=%d listPayoutsCalls=%d, want 1, 1 and 1 (enabled defaults to true when unset)", fake.listCalls, fake.sweepCalls, fake.listPayoutsCalls)
+	if fake.listCalls != 1 || fake.sweepCalls != 1 || fake.listPayoutsCalls != 1 || fake.listRefundsCalls != 1 {
+		t.Errorf("listCalls=%d sweepCalls=%d listPayoutsCalls=%d listRefundsCalls=%d, want 1, 1, 1 and 1 (enabled defaults to true when unset)", fake.listCalls, fake.sweepCalls, fake.listPayoutsCalls, fake.listRefundsCalls)
 	}
 }
 
@@ -64,8 +74,8 @@ func TestJob_RunOnce_EnabledFalseSkipsWork(t *testing.T) {
 
 	j.RunOnce(context.Background())
 
-	if fake.listCalls != 0 || fake.sweepCalls != 0 || fake.listPayoutsCalls != 0 {
-		t.Errorf("listCalls=%d sweepCalls=%d listPayoutsCalls=%d, want 0, 0 and 0 (reconciliation disabled via dynamic config)", fake.listCalls, fake.sweepCalls, fake.listPayoutsCalls)
+	if fake.listCalls != 0 || fake.sweepCalls != 0 || fake.listPayoutsCalls != 0 || fake.listRefundsCalls != 0 {
+		t.Errorf("listCalls=%d sweepCalls=%d listPayoutsCalls=%d listRefundsCalls=%d, want 0, 0, 0 and 0 (reconciliation disabled via dynamic config)", fake.listCalls, fake.sweepCalls, fake.listPayoutsCalls, fake.listRefundsCalls)
 	}
 }
 
@@ -77,7 +87,7 @@ func TestJob_RunOnce_EnabledTrueRunsAsNormal(t *testing.T) {
 
 	j.RunOnce(context.Background())
 
-	if fake.listCalls != 1 || fake.sweepCalls != 1 || fake.listPayoutsCalls != 1 {
-		t.Errorf("listCalls=%d sweepCalls=%d listPayoutsCalls=%d, want 1, 1 and 1", fake.listCalls, fake.sweepCalls, fake.listPayoutsCalls)
+	if fake.listCalls != 1 || fake.sweepCalls != 1 || fake.listPayoutsCalls != 1 || fake.listRefundsCalls != 1 {
+		t.Errorf("listCalls=%d sweepCalls=%d listPayoutsCalls=%d listRefundsCalls=%d, want 1, 1, 1 and 1", fake.listCalls, fake.sweepCalls, fake.listPayoutsCalls, fake.listRefundsCalls)
 	}
 }

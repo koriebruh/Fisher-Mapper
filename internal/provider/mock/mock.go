@@ -254,6 +254,13 @@ func (m *Mock) Refund(ctx context.Context, req provider.RefundRequest) (provider
 	}
 
 	ref := providerRef("rfnd", req.IdempotencyKey)
+	// Record amount/currency exactly like Charge/Payout do -- without this,
+	// GetStatus(ref) for a refund would always return the zero value,
+	// making the reconciliation amount/currency check impossible to
+	// exercise (it would report a mismatch on every refund, never a match).
+	m.mu.Lock()
+	m.charges[ref] = chargeRecord{amount: req.Amount, currency: req.Currency}
+	m.mu.Unlock()
 	return provider.RefundResponse{
 		ProviderRefundRef: ref,
 		Status:            m.cfg.Status,

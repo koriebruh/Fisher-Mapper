@@ -239,6 +239,104 @@ func (s *Service) ReconcilePayout(ctx context.Context, p *Payout) error {
 	return nil
 }
 
+// ListStuckRefunds is the refund analogue of ListStuckProcessing/
+// ListStuckPayouts -- a refund whose provider call legitimately returns
+// "processing" (a common async-refund PSP behavior) needs the identical
+// stuck-processing sweep charges and payouts get, not a permanent dead end.
+func (s *Service) ListStuckRefunds(ctx context.Context, threshold time.Duration) ([]*Refund, error) {
+	rr, err := s.refundRepo()
+	if err != nil {
+		return nil, err
+	}
+	cutoff := s.now().Add(-threshold)
+	return rr.ListRefundsProcessingOlderThan(ctx, cutoff)
+}
+
+// ReconcileRefund resolves ONE stuck-processing refund via provider.GetStatus,
+// mirroring ReconcilePayout's shape (webhook staging join is left to
+// SweepStagedWebhooks, not repeated here -- see its doc for why the
+// provider/refund lookup fallback lives there instead of a per-call Join):
+// verify amount+currency against the stored refund before applying any
+// transition (the same money invariant plan Decide Now item 11 requires for
+// charges/payouts), never trusting GetStatus blindly.
+//
+// A refund stuck "processing" with no provider_refund_ref (never actually
+// called, or the provider call errored/timed out before a reference came
+// back) has nothing for GetStatus to query -- same documented, known gap as
+// ReconcilePayment/ReconcilePayout.
+func (s *Service) ReconcileRefund(ctx context.Context, ref *Refund) error {
+	rr, err := s.refundRepo()
+	if err != nil {
+		return err
+	}
+
+	prov, err := s.providers.Get(ref.Provider)
+	if err != nil {
+		return fmt.Errorf("reconcile refund %s: %w", ref.ID, err)
+	}
+
+	fresh, err := rr.GetRefund(ctx, ref.ID)
+	if err != nil {
+		return fmt.Errorf("reconcile refund %s: re-fetch: %w", ref.ID, err)
+	}
+	if IsTerminal(fresh.Status) {
+		return nil
+	}
+	if fresh.ProviderRefundRef == nil {
+		slog.Warn("reconcile refund: stuck processing with no provider_refund_ref, cannot query GetStatus (known gap)",
+			"source", apperror.SourceInternal, "refund_id", ref.ID)
+		return nil
+	}
+
+	statusResp, err := prov.GetStatus(ctx, provider.GetStatusRequest{ProviderRef: *fresh.ProviderRefundRef})
+	if err != nil {
+		// err is the raw error from the Provider's GetStatus (never itself an
+		// *apperror.Error) -- wrap as CodeProviderError so LogAttr classifies
+		// it as SourceProvider, not SourceInternal.
+		wrapped := apperror.Wrap(apperror.CodeProviderError, "reconcile refund: GetStatus failed", err)
+		slog.Warn("reconcile refund: GetStatus failed, will retry next cycle", "error", err, "refund_id", ref.ID, apperror.LogAttr(wrapped))
+		return nil
+	}
+
+	var target Status
+	switch statusResp.Status {
+	case provider.StatusSucceeded:
+		target = StatusSucceeded
+	case provider.StatusFailed:
+		target = StatusFailed
+	default:
+		return nil
+	}
+
+	if statusResp.Amount != fresh.Amount || statusResp.Currency != fresh.Currency {
+		slog.Error("reconciliation mismatch: GetStatus amount/currency does not match stored refund, refusing to apply",
+			"source", apperror.SourceProvider, "refund_id", ref.ID,
+			"stored_amount", fresh.Amount, "stored_currency", fresh.Currency,
+			"provider_amount", statusResp.Amount, "provider_currency", statusResp.Currency)
+		if s.onReconciliationMismatch != nil {
+			s.onReconciliationMismatch(ctx)
+		}
+		return nil
+	}
+
+	if err := rr.ApplyRefundTransition(ctx, RefundTransitionParams{
+		RefundID:    fresh.ID,
+		To:          target,
+		EventTS:     s.now(),
+		EventType:   "reconciliation_" + string(target),
+		Provider:    fresh.Provider,
+		InitiatedBy: InitiatedBySystem,
+	}); err != nil {
+		switch apperror.CodeOf(err) {
+		case apperror.CodeInvalidTransition, apperror.CodeTerminalState, apperror.CodeStaleEvent:
+			return nil
+		default:
+			return fmt.Errorf("reconcile refund %s: apply transition: %w", fresh.ID, err)
+		}
+	}
+	return nil
+}
+
 // SweepStagedWebhooks re-attempts webhook.Join for every (provider,
 // provider_ref) pair still carrying unprocessed staged events — the "sweep
 // webhook events staged with no provider_ref match yet" gap the Fase 3

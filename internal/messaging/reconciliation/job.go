@@ -30,6 +30,13 @@ type service interface {
 	// sweep money IN gets, not just documentation of the gap.
 	ListStuckPayouts(ctx context.Context, threshold time.Duration) ([]*payment.Payout, error)
 	ReconcilePayout(ctx context.Context, p *payment.Payout) error
+
+	// ListStuckRefunds/ReconcileRefund mirror the same pair again, applied to
+	// refunds: a refund whose provider call returns "processing" (a common
+	// async-refund PSP behavior) needs a resolution path, not a permanent
+	// dead end -- the HIGH finding this job's refund support closes.
+	ListStuckRefunds(ctx context.Context, threshold time.Duration) ([]*payment.Refund, error)
+	ReconcileRefund(ctx context.Context, ref *payment.Refund) error
 }
 
 // Job periodically:
@@ -130,6 +137,20 @@ func (j *Job) runOnce(ctx context.Context) {
 		}
 		if len(stuckPayouts) > 0 {
 			slog.Info("reconciliation: pass complete", "stuck_payouts_seen", len(stuckPayouts))
+		}
+	}
+
+	stuckRefunds, err := j.service.ListStuckRefunds(ctx, j.threshold)
+	if err != nil {
+		slog.Error("reconciliation: list stuck refunds", "layer", "reconciliation", "error", err, apperror.LogAttr(err))
+	} else {
+		for _, ref := range stuckRefunds {
+			if err := j.service.ReconcileRefund(ctx, ref); err != nil {
+				slog.Error("reconciliation: resolve refund", "layer", "reconciliation", "error", err, "refund_id", ref.ID, apperror.LogAttr(err))
+			}
+		}
+		if len(stuckRefunds) > 0 {
+			slog.Info("reconciliation: pass complete", "stuck_refunds_seen", len(stuckRefunds))
 		}
 	}
 

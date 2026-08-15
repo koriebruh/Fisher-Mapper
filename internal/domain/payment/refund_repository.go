@@ -253,6 +253,38 @@ func (r *PGRepository) SetRefundProviderRef(ctx context.Context, id uuid.UUID, p
 	return nil
 }
 
+// ListRefundsProcessingOlderThan returns refunds in StatusProcessing whose
+// last_event_at is older than cutoff -- the refund analogue of
+// ListProcessingOlderThan/ListPayoutsProcessingOlderThan, backing the
+// reconciliation sweep for stuck refunds: a refund whose provider call
+// legitimately returns "processing" needs the identical stuck-processing
+// recovery a stuck charge or payout gets, not a permanent dead end.
+func (r *PGRepository) ListRefundsProcessingOlderThan(ctx context.Context, cutoff time.Time) ([]*Refund, error) {
+	selectSQL := `SELECT ` + refundSelectColumns + `
+		FROM refunds
+		WHERE status = 'processing' AND last_event_at < $1
+		ORDER BY last_event_at`
+
+	rows, err := r.pool.Query(ctx, selectSQL, cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("refund: list processing older than: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*Refund
+	for rows.Next() {
+		ref := &Refund{}
+		if err := rows.Scan(refundScanDest(ref)...); err != nil {
+			return nil, fmt.Errorf("refund: list processing older than: scan: %w", err)
+		}
+		out = append(out, ref)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("refund: list processing older than: %w", err)
+	}
+	return out, nil
+}
+
 // RefundRepository is the subset of refund-related persistence Service
 // depends on, declared separately from Repository (which stays payment-only
 // in its doc comment / historical shape) so this file is the single place
@@ -264,6 +296,7 @@ type RefundRepository interface {
 	GetRefund(ctx context.Context, id uuid.UUID) (*Refund, error)
 	GetRefundForTenant(ctx context.Context, id uuid.UUID, tenantID string) (*Refund, error)
 	SetRefundProviderRef(ctx context.Context, id uuid.UUID, providerRefundRef string) error
+	ListRefundsProcessingOlderThan(ctx context.Context, cutoff time.Time) ([]*Refund, error)
 }
 
 var _ RefundRepository = (*PGRepository)(nil)
