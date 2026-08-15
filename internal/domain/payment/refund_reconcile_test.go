@@ -2,6 +2,8 @@ package payment
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"testing"
 	"time"
@@ -14,6 +16,16 @@ import (
 	"Fisher-Mapper/internal/provider"
 	"Fisher-Mapper/internal/provider/mock"
 )
+
+// mockRefundProviderRef replicates mock.Mock's unexported providerRef("rfnd",
+// idempotencyKey) derivation exactly, so a test can compute the refund's
+// eventual provider_refund_ref BEFORE calling CreateRefund/ProcessRefund --
+// the only way to stage a webhook for a refund ref that genuinely doesn't
+// exist yet, rather than staging after the row (and its ref) already exist.
+func mockRefundProviderRef(idempotencyKey string) string {
+	sum := sha256.Sum256([]byte(idempotencyKey))
+	return "rfnd_" + hex.EncodeToString(sum[:])[:20]
+}
 
 // createProcessingRefund drives a fresh refund to StatusProcessing via
 // CreateRefund + ProcessRefund, with the parent payment first driven to
@@ -246,5 +258,100 @@ func TestService_SweepStagedWebhooks_ResolvesRefundStagedEvent(t *testing.T) {
 	}
 	if refundID == nil || *refundID != ref.ID {
 		t.Errorf("incoming_webhook_events.refund_id = %v, want %s", refundID, ref.ID)
+	}
+}
+
+// TestService_SweepStagedWebhooks_JoinsRefundWebhookStagedBeforeRowExisted
+// is the HIGH finding's exact scenario, not just the sweep mechanism in
+// general: a webhook for a refund's provider_refund_ref arrives (and is
+// staged, no-404) BEFORE the refund row itself exists, then must join once
+// CreateRefund/ProcessRefund creates that row and assigns that exact ref --
+// mock.Mock's providerRef derivation is deterministic on the idempotency
+// key, so the ref is computed up front and the webhook staged first.
+func TestService_SweepStagedWebhooks_JoinsRefundWebhookStagedBeforeRowExisted(t *testing.T) {
+	pool := testPool(t)
+	stagingStore := webhook.NewStore(pool)
+	mockProv := mock.New(mock.Config{Name: "mock"})
+	svc := newTestService(pool, mockProv).WithWebhookStaging(stagingStore)
+
+	paymentID := createSucceededPayment(t, svc, 900)
+
+	key := uuid.NewString()
+	futureRef := mockRefundProviderRef(key)
+
+	// occurred_at must be a timestamp the PROVIDER would plausibly attach to
+	// this event -- i.e. later than the refund's own pending->processing
+	// transition, which CreateRefund/ProcessRefund below haven't even run
+	// yet. A same-instant (or earlier) occurred_at would make Transition
+	// reject this as a stale event once Join replays it (evt.OccurredAt <
+	// last_event_at), which is a correct rejection, but not what this test
+	// is exercising -- so back-date the STAGING order but not the event's
+	// own clock.
+	occurredAt := time.Now().Add(time.Minute).UTC()
+	eventID := uuid.NewString()
+	payload, _ := json.Marshal(map[string]any{
+		"provider_event_id": eventID,
+		"provider_ref":      futureRef,
+		"event_type":        "refund.succeeded",
+		"status":            "succeeded",
+		"occurred_at":       occurredAt,
+	})
+	if err := stagingStore.Stage(context.Background(), "mock", eventID, futureRef, payload); err != nil {
+		t.Fatalf("Stage (before refund row exists): %v", err)
+	}
+
+	// The staged event has nothing to match yet -- applying it directly must
+	// report CodeNotFound (the no-404 handler's exact contract), never a
+	// spurious success or a different error.
+	applyErr := svc.ApplyProviderEvent(context.Background(), "mock", provider.WebhookEvent{
+		ProviderRef: futureRef, Status: provider.StatusSucceeded, OccurredAt: time.Now().UTC(),
+	})
+	if apperror.CodeOf(applyErr) != apperror.CodeNotFound {
+		t.Fatalf("ApplyProviderEvent before refund exists: CodeOf = %v, want CodeNotFound", apperror.CodeOf(applyErr))
+	}
+
+	// Provider stays "processing" so the refund row lands with the SAME ref
+	// the webhook was staged against, and CreateRefund/ProcessRefund use the
+	// SAME idempotency key so mock.Mock derives futureRef again.
+	mockProv.SetStatus(provider.StatusProcessing)
+	out, err := svc.CreateRefund(context.Background(), CreateRefundInput{
+		PaymentID: paymentID, TenantID: uuid.NewString(), Amount: 400, Envelope: testEnvelope,
+	}, key, refundBodyFor(400))
+	if err != nil {
+		t.Fatalf("CreateRefund: %v", err)
+	}
+	ref, err := NewPGRepository(pool).GetRefund(context.Background(), out.RefundID)
+	if err != nil {
+		t.Fatalf("GetRefund: %v", err)
+	}
+	if err := svc.ProcessRefund(context.Background(), RefundTaskInput{
+		RefundID: ref.ID, PaymentID: paymentID, IdempotencyKey: key,
+		Amount: 400, Currency: "USD", Provider: "mock", PaymentProviderRef: derefOrEmpty(ref.ProviderRef),
+	}); err != nil {
+		t.Fatalf("ProcessRefund: %v", err)
+	}
+
+	after, err := NewPGRepository(pool).GetRefund(context.Background(), ref.ID)
+	if err != nil {
+		t.Fatalf("GetRefund: %v", err)
+	}
+	if after.ProviderRefundRef == nil || *after.ProviderRefundRef != futureRef {
+		t.Fatalf("refund provider_refund_ref = %v, want %q (must match the ref the webhook was staged against)", after.ProviderRefundRef, futureRef)
+	}
+
+	matched, err := svc.SweepStagedWebhooks(context.Background())
+	if err != nil {
+		t.Fatalf("SweepStagedWebhooks: %v", err)
+	}
+	if matched < 1 {
+		t.Fatalf("SweepStagedWebhooks matched %d pairs, want at least 1 (the pre-staged refund webhook)", matched)
+	}
+
+	final, err := NewPGRepository(pool).GetRefund(context.Background(), ref.ID)
+	if err != nil {
+		t.Fatalf("GetRefund: %v", err)
+	}
+	if final.Status != StatusSucceeded {
+		t.Errorf("refund status after sweep = %s, want succeeded (webhook staged BEFORE the row existed must still join)", final.Status)
 	}
 }
