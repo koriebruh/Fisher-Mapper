@@ -11,18 +11,21 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 
 	"Fisher-Mapper/internal/platform/config"
 	"Fisher-Mapper/internal/platform/db"
 	"Fisher-Mapper/internal/platform/observability"
+	"Fisher-Mapper/internal/platform/tenantauth"
 )
 
 const migrationsDir = "internal/platform/db/migrations"
 
 func main() {
 	down := flag.Bool("down", false, "roll back the single most recent migration instead of applying pending ones")
+	createTenantKey := flag.String("create-tenant-key", "", "generate a tenant_api_keys row for this tenant_id, print the new key to stdout, then exit (no migrations run)")
 	flag.Parse()
 
 	logger := observability.NewLogger("info")
@@ -47,6 +50,22 @@ func main() {
 		os.Exit(1)
 	}
 	defer pool.Close()
+
+	// -create-tenant-key is a one-off credential-issuing operation, not a
+	// migration -- checked before touching goose/sqlDB at all so it works
+	// against a pool whether or not migration 00010 has been the last one
+	// applied yet (it does need that table to exist, but this flag's whole
+	// point is being invoked as its own separate operator step, same as
+	// -down).
+	if *createTenantKey != "" {
+		apiKey, err := tenantauth.NewStore(pool).CreateKey(ctx, *createTenantKey)
+		if err != nil {
+			logger.Error("create tenant key", "error", err)
+			os.Exit(1)
+		}
+		fmt.Println(apiKey)
+		return
+	}
 
 	sqlDB := db.NewMigrationHandle(pool)
 	defer sqlDB.Close()
