@@ -2,11 +2,13 @@ package payment
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"Fisher-Mapper/internal/messaging/webhook"
 	"Fisher-Mapper/internal/provider"
 	"Fisher-Mapper/internal/provider/mock"
 )
@@ -128,5 +130,91 @@ func TestService_ListStuckPayouts_OnlyReturnsPayoutsOlderThanThreshold(t *testin
 	}
 	if !found {
 		t.Errorf("payout %s not returned as stuck under a ~zero threshold", p.ID)
+	}
+}
+
+// TestService_ApplyProviderEvent_MatchesPayoutByProviderRef is the payout
+// half of the HIGH finding's webhook-join fix: a payout's own
+// async-completion webhook (keyed by payouts.provider_ref, which
+// FindPayoutByProviderRef did not even exist to look up before this fix)
+// must be joinable once the payout row exists.
+func TestService_ApplyProviderEvent_MatchesPayoutByProviderRef(t *testing.T) {
+	pool := testPool(t)
+	mockProv := mock.New(mock.Config{Name: "mock", Status: provider.StatusProcessing})
+	svc := newTestService(pool, mockProv)
+
+	p := createProcessingPayout(t, svc, 350)
+	if p.ProviderRef == nil || *p.ProviderRef == "" {
+		t.Fatal("expected provider_ref to be set after ProcessPayout")
+	}
+
+	evt := provider.WebhookEvent{
+		ProviderRef: *p.ProviderRef,
+		Status:      provider.StatusSucceeded,
+		OccurredAt:  time.Now().UTC(),
+	}
+	if err := svc.ApplyProviderEvent(context.Background(), "mock", evt); err != nil {
+		t.Fatalf("ApplyProviderEvent: %v", err)
+	}
+
+	after, err := NewPGRepository(pool).GetPayout(context.Background(), p.ID)
+	if err != nil {
+		t.Fatalf("GetPayout: %v", err)
+	}
+	if after.Status != StatusSucceeded {
+		t.Errorf("payout status after ApplyProviderEvent = %s, want succeeded", after.Status)
+	}
+}
+
+// TestService_SweepStagedWebhooks_ResolvesPayoutStagedEvent is the sweep-side
+// analogue for payouts: a webhook staged for a payout's provider_ref must
+// eventually resolve via the periodic sweep.
+func TestService_SweepStagedWebhooks_ResolvesPayoutStagedEvent(t *testing.T) {
+	pool := testPool(t)
+	stagingStore := webhook.NewStore(pool)
+	mockProv := mock.New(mock.Config{Name: "mock", Status: provider.StatusProcessing})
+	svc := newTestService(pool, mockProv).WithWebhookStaging(stagingStore)
+
+	p := createProcessingPayout(t, svc, 275)
+	if p.ProviderRef == nil || *p.ProviderRef == "" {
+		t.Fatal("expected provider_ref to be set after ProcessPayout")
+	}
+
+	eventID := uuid.NewString()
+	payload, _ := json.Marshal(map[string]any{
+		"provider_event_id": eventID,
+		"provider_ref":      *p.ProviderRef,
+		"event_type":        "payout.succeeded",
+		"status":            "succeeded",
+		"occurred_at":       time.Now().UTC(),
+	})
+	if err := stagingStore.Stage(context.Background(), "mock", eventID, *p.ProviderRef, payload); err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+
+	matched, err := svc.SweepStagedWebhooks(context.Background())
+	if err != nil {
+		t.Fatalf("SweepStagedWebhooks: %v", err)
+	}
+	if matched < 1 {
+		t.Errorf("SweepStagedWebhooks matched %d pairs, want at least 1", matched)
+	}
+
+	after, err := NewPGRepository(pool).GetPayout(context.Background(), p.ID)
+	if err != nil {
+		t.Fatalf("GetPayout: %v", err)
+	}
+	if after.Status != StatusSucceeded {
+		t.Errorf("payout status after sweep = %s, want succeeded", after.Status)
+	}
+
+	var payoutID *uuid.UUID
+	if err := pool.QueryRow(context.Background(),
+		`SELECT payout_id FROM incoming_webhook_events WHERE provider = 'mock' AND event_id = $1`, eventID,
+	).Scan(&payoutID); err != nil {
+		t.Fatalf("query staged row: %v", err)
+	}
+	if payoutID == nil || *payoutID != p.ID {
+		t.Errorf("incoming_webhook_events.payout_id = %v, want %s", payoutID, p.ID)
 	}
 }

@@ -233,6 +233,27 @@ func (r *PGRepository) GetRefundForTenant(ctx context.Context, id uuid.UUID, ten
 	return ref, nil
 }
 
+// FindRefundByProviderRefundRef looks up a refund by (provider,
+// providerRefundRef) -- the refund-table analogue of
+// Repository.FindByProviderRef, used to join an inbound webhook keyed by a
+// refund's OWN async-completion reference. Deliberately NOT
+// refunds.provider_ref (that column is the ORIGINAL charge's ref, copied
+// from the parent payment by CreateRefundWithOutbox -- looking that up here
+// would collide with the payment lookup for the same ref).
+func (r *PGRepository) FindRefundByProviderRefundRef(ctx context.Context, provider, providerRefundRef string) (*Refund, error) {
+	selectSQL := `SELECT ` + refundSelectColumns + ` FROM refunds WHERE provider = $1 AND provider_refund_ref = $2`
+
+	ref := &Refund{}
+	err := r.pool.QueryRow(ctx, selectSQL, provider, providerRefundRef).Scan(refundScanDest(ref)...)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperror.New(apperror.CodeNotFound, "refund: not found for provider refund ref")
+		}
+		return nil, fmt.Errorf("refund: find by provider refund ref: %w", err)
+	}
+	return ref, nil
+}
+
 // SetRefundProviderRef persists provider_refund_ref without changing status
 // -- mirrors Repository.SetProviderRef/PayoutRepository.SetPayoutProviderRef
 // exactly, for the identical reason: a provider call that returns a refund
@@ -295,6 +316,7 @@ type RefundRepository interface {
 	ApplyRefundTransition(ctx context.Context, params RefundTransitionParams) error
 	GetRefund(ctx context.Context, id uuid.UUID) (*Refund, error)
 	GetRefundForTenant(ctx context.Context, id uuid.UUID, tenantID string) (*Refund, error)
+	FindRefundByProviderRefundRef(ctx context.Context, provider, providerRefundRef string) (*Refund, error)
 	SetRefundProviderRef(ctx context.Context, id uuid.UUID, providerRefundRef string) error
 	ListRefundsProcessingOlderThan(ctx context.Context, cutoff time.Time) ([]*Refund, error)
 }

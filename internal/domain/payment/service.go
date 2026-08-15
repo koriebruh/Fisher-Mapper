@@ -328,24 +328,30 @@ func (s *Service) doCreatePayment(ctx context.Context, in CreatePaymentInput, id
 	return out, nil
 }
 
-// ApplyProviderEvent applies a parsed webhook event to the payment it
-// refers to (matched by provider_ref).
+// ApplyProviderEvent applies a parsed webhook event to whichever row it
+// refers to -- a payment (matched by provider_ref), a refund (matched by
+// provider_refund_ref), or a payout (matched by provider_ref), tried in that
+// order via resolveStagedMatch (reconcile.go). A single inbound webhook's
+// provider ref can only ever belong to one of the three, since each is a
+// reference the provider minted independently for that specific operation.
 //
-// If no payment exists yet for evt.ProviderRef, this returns
+// If none of the three match evt.ProviderRef, this returns
 // apperror.CodeNotFound and changes nothing — it does NOT stage the event
 // itself. As of Fase 3, staging on this exact outcome is the caller's job:
 // the REST webhook handler (internal/transport/rest/webhook.go) calls this
 // first, and only falls back to webhook.Store.Stage when it sees
 // CodeNotFound, so the "never 404, always 200, stage for later" rule lives
 // at the transport edge while this method stays a plain, transport-agnostic
-// "apply or tell me why not".
+// "apply or tell me why not". Every lookup below must therefore keep
+// surfacing CodeNotFound (never wrap it into something else) on a genuine
+// miss, or that no-404 staging path silently stops working.
 //
 // Dedup (same provider_event_id applied twice) and stale-event rejection
 // (older timestamp than the last applied event) are both enforced inside
-// Repository.ApplyTransition, atomically, under the same row lock as the
-// state transition itself.
+// ApplyTransition/ApplyRefundTransition/ApplyPayoutTransition, atomically,
+// under the same row lock as the state transition itself.
 func (s *Service) ApplyProviderEvent(ctx context.Context, providerName string, evt provider.WebhookEvent) error {
-	p, err := s.repo.FindByProviderRef(ctx, providerName, evt.ProviderRef)
+	match, err := s.resolveStagedMatch(ctx, providerName, evt.ProviderRef)
 	if err != nil {
 		return err
 	}
@@ -364,21 +370,56 @@ func (s *Service) ApplyProviderEvent(ctx context.Context, providerName string, e
 	if evt.ProviderEventID != "" {
 		eventID = &evt.ProviderEventID
 	}
+	const eventType = "webhook_"
+	// A webhook callback is the PJP calling us, not the customer acting
+	// directly against this template's own API -- "system" per
+	// InitiatedBy's taxonomy, same as every other worker-driven transition
+	// today, regardless of which of the three tables below actually applies.
+	const initiatedBy = InitiatedBySystem
 
-	return s.repo.ApplyTransition(ctx, TransitionParams{
-		PaymentID:       p.ID,
-		To:              target,
-		EventTS:         evt.OccurredAt,
-		EventType:       "webhook_" + string(target),
-		Provider:        providerName,
-		ProviderEventID: eventID,
-		RawPayload:      evt.RawPayload,
-		// A webhook callback is the PJP calling us, not the customer acting
-		// directly against this template's own API -- "system" per
-		// InitiatedBy's taxonomy, same as every other worker-driven
-		// transition today.
-		InitiatedBy: InitiatedBySystem,
-	})
+	switch match.kind {
+	case stagedMatchRefund:
+		rr, err := s.refundRepo()
+		if err != nil {
+			return err
+		}
+		return rr.ApplyRefundTransition(ctx, RefundTransitionParams{
+			RefundID:        match.id,
+			To:              target,
+			EventTS:         evt.OccurredAt,
+			EventType:       eventType + string(target),
+			Provider:        providerName,
+			ProviderEventID: eventID,
+			RawPayload:      evt.RawPayload,
+			InitiatedBy:     initiatedBy,
+		})
+	case stagedMatchPayout:
+		pr, err := s.payoutRepo()
+		if err != nil {
+			return err
+		}
+		return pr.ApplyPayoutTransition(ctx, PayoutTransitionParams{
+			PayoutID:        match.id,
+			To:              target,
+			EventTS:         evt.OccurredAt,
+			EventType:       eventType + string(target),
+			Provider:        providerName,
+			ProviderEventID: eventID,
+			RawPayload:      evt.RawPayload,
+			InitiatedBy:     initiatedBy,
+		})
+	default:
+		return s.repo.ApplyTransition(ctx, TransitionParams{
+			PaymentID:       match.id,
+			To:              target,
+			EventTS:         evt.OccurredAt,
+			EventType:       eventType + string(target),
+			Provider:        providerName,
+			ProviderEventID: eventID,
+			RawPayload:      evt.RawPayload,
+			InitiatedBy:     initiatedBy,
+		})
+	}
 }
 
 // GetPayment fetches a payment by id -- the read side of the async

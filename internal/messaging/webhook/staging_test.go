@@ -136,7 +136,11 @@ func TestJoin_AppliesStagedEventOnceMatchingPaymentExists(t *testing.T) {
 		return nil
 	}
 
-	resolved, err := Join(ctx, store, parse, apply, providerName, providerRef, paymentID)
+	markProcessed := func(ctx context.Context, stagedID uuid.UUID) error {
+		return store.MarkProcessed(ctx, stagedID, paymentID)
+	}
+
+	resolved, err := Join(ctx, store, parse, apply, providerName, providerRef, markProcessed)
 	if err != nil {
 		t.Fatalf("Join: %v", err)
 	}
@@ -152,7 +156,7 @@ func TestJoin_AppliesStagedEventOnceMatchingPaymentExists(t *testing.T) {
 
 	// A second Join call must not re-apply: the event is now marked
 	// processed.
-	resolved, err = Join(ctx, store, parse, apply, providerName, providerRef, paymentID)
+	resolved, err = Join(ctx, store, parse, apply, providerName, providerRef, markProcessed)
 	if err != nil {
 		t.Fatalf("second Join: %v", err)
 	}
@@ -187,7 +191,10 @@ func TestJoin_LeavesGenuineApplyErrorUnprocessed(t *testing.T) {
 		return apperror.Wrap(apperror.CodeInternal, "boom", errors.New("db exploded"))
 	}
 
-	resolved, err := Join(ctx, store, parse, apply, providerName, providerRef, uuid.New())
+	markProcessed := func(ctx context.Context, stagedID uuid.UUID) error {
+		return store.MarkProcessed(ctx, stagedID, uuid.New())
+	}
+	resolved, err := Join(ctx, store, parse, apply, providerName, providerRef, markProcessed)
 	if err != nil {
 		t.Fatalf("Join: %v", err)
 	}

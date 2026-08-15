@@ -157,6 +157,6 @@ func (j *Job) runOnce(ctx context.Context) {
 	if matched, err := j.service.SweepStagedWebhooks(ctx); err != nil {
 		slog.Error("reconciliation: sweep staged webhooks", "layer", "reconciliation", "error", err, apperror.LogAttr(err))
 	} else if matched > 0 {
-		slog.Info("reconciliation: staged webhook sweep matched payments", "count", matched)
+		slog.Info("reconciliation: staged webhook sweep matched rows", "count", matched)
 	}
 }

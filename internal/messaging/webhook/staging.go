@@ -135,6 +135,28 @@ func (s *Store) MarkProcessed(ctx context.Context, id, paymentID uuid.UUID) erro
 	return nil
 }
 
+// MarkProcessedRefund is MarkProcessed's refund-table analogue -- sets
+// refund_id (migration 00011) instead of payment_id, since a staged event
+// that resolved to a refund's own provider_refund_ref must never be
+// recorded against the (unrelated) payments table FK.
+func (s *Store) MarkProcessedRefund(ctx context.Context, id, refundID uuid.UUID) error {
+	const updateSQL = `UPDATE incoming_webhook_events SET processed_at = now(), refund_id = $1 WHERE id = $2`
+	if _, err := s.pool.Exec(ctx, updateSQL, refundID, id); err != nil {
+		return fmt.Errorf("webhook: mark processed refund: %w", err)
+	}
+	return nil
+}
+
+// MarkProcessedPayout is MarkProcessed's payout-table analogue -- sets
+// payout_id (migration 00011).
+func (s *Store) MarkProcessedPayout(ctx context.Context, id, payoutID uuid.UUID) error {
+	const updateSQL = `UPDATE incoming_webhook_events SET processed_at = now(), payout_id = $1 WHERE id = $2`
+	if _, err := s.pool.Exec(ctx, updateSQL, payoutID, id); err != nil {
+		return fmt.Errorf("webhook: mark processed payout: %w", err)
+	}
+	return nil
+}
+
 // ParseFunc turns a staged event's raw payload back into a
 // provider.WebhookEvent -- normally a closure over the provider's
 // ParseWebhook (headers are not preserved in staging, only the body, which
@@ -161,12 +183,20 @@ func benignApplyOutcome(err error) bool {
 	}
 }
 
+// MarkProcessedFunc records that a staged event resolved to a specific row
+// -- a closure over whichever of Store.MarkProcessed/MarkProcessedRefund/
+// MarkProcessedPayout matches the entity apply actually resolved evt
+// against, so Join itself never has to know which of the three tables (or
+// which of their FK columns on incoming_webhook_events) that was.
+type MarkProcessedFunc func(ctx context.Context, stagedID uuid.UUID) error
+
 // Join looks up staged events for (providerName, providerRef) and applies
 // each via apply, using parse to decode the staged raw payload. Called once
-// a payment row's provider_ref becomes known -- per plan item 9, "webhook
-// telat gak boleh nimpa state yang lebih baru" is still enforced by apply
-// itself (the state machine), Join is only responsible for finding events
-// that arrived too early and giving them a second chance.
+// a payment/refund/payout row's own provider ref becomes known -- per plan
+// item 9, "webhook telat gak boleh nimpa state yang lebih baru" is still
+// enforced by apply itself (the state machine), Join is only responsible
+// for finding events that arrived too early and giving them a second
+// chance.
 //
 // Returns the count of events resolved (applied or found benign) so callers
 // can log/test against it. A genuine apply error leaves that event
@@ -178,7 +208,7 @@ func Join(
 	parse ParseFunc,
 	apply ApplyFunc,
 	providerName, providerRef string,
-	paymentID uuid.UUID,
+	markProcessed MarkProcessedFunc,
 ) (resolved int, err error) {
 	events, err := store.FindUnprocessedByRef(ctx, providerName, providerRef)
 	if err != nil {
@@ -203,7 +233,7 @@ func Join(
 			continue
 		}
 
-		if merr := store.MarkProcessed(ctx, e.ID, paymentID); merr != nil {
+		if merr := markProcessed(ctx, e.ID); merr != nil {
 			slog.Error("webhook join: mark processed failed", "error", merr, "staged_id", e.ID, apperror.LogAttr(merr))
 			continue
 		}

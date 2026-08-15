@@ -200,6 +200,25 @@ func (r *PGRepository) GetPayoutForTenant(ctx context.Context, id uuid.UUID, ten
 	return p, nil
 }
 
+// FindPayoutByProviderRef looks up a payout by (provider, providerRef) --
+// the payout-table analogue of Repository.FindByProviderRef, added (it did
+// not exist before) so an inbound webhook keyed by a payout's own
+// provider-assigned reference can be joined to it, the same way a charge's
+// webhook already is.
+func (r *PGRepository) FindPayoutByProviderRef(ctx context.Context, provider, providerRef string) (*Payout, error) {
+	selectSQL := `SELECT ` + payoutSelectColumns + ` FROM payouts WHERE provider = $1 AND provider_ref = $2`
+
+	p := &Payout{}
+	err := r.pool.QueryRow(ctx, selectSQL, provider, providerRef).Scan(payoutScanDest(p)...)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperror.New(apperror.CodeNotFound, "payout: not found for provider ref")
+		}
+		return nil, fmt.Errorf("payout: find by provider ref: %w", err)
+	}
+	return p, nil
+}
+
 // ListPayoutsProcessingOlderThan returns payouts in StatusProcessing whose
 // last_event_at is older than cutoff -- the payout analogue of
 // ListProcessingOlderThan, backing the reconciliation sweep for stuck
@@ -242,6 +261,7 @@ type PayoutRepository interface {
 	SetPayoutProviderRef(ctx context.Context, id uuid.UUID, providerRef string) error
 	GetPayout(ctx context.Context, id uuid.UUID) (*Payout, error)
 	GetPayoutForTenant(ctx context.Context, id uuid.UUID, tenantID string) (*Payout, error)
+	FindPayoutByProviderRef(ctx context.Context, provider, providerRef string) (*Payout, error)
 	ListPayoutsProcessingOlderThan(ctx context.Context, cutoff time.Time) ([]*Payout, error)
 }
 

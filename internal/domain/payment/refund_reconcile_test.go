@@ -2,12 +2,15 @@ package payment
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"Fisher-Mapper/internal/domain/apperror"
+	"Fisher-Mapper/internal/messaging/webhook"
 	"Fisher-Mapper/internal/provider"
 	"Fisher-Mapper/internal/provider/mock"
 )
@@ -139,5 +142,109 @@ func TestService_ListStuckRefunds_OnlyReturnsRefundsOlderThanThreshold(t *testin
 	}
 	if !found {
 		t.Errorf("refund %s not returned as stuck under a ~zero threshold", ref.ID)
+	}
+}
+
+// TestService_ApplyProviderEvent_MatchesRefundByProviderRefundRef is the
+// HIGH finding's webhook-join half: a refund's own async-completion webhook
+// (keyed by provider_refund_ref, never a payment's provider_ref) must be
+// joinable once the refund row exists -- previously ApplyProviderEvent only
+// ever tried the payments table, so this ref could never match anything.
+func TestService_ApplyProviderEvent_MatchesRefundByProviderRefundRef(t *testing.T) {
+	pool := testPool(t)
+	mockProv := mock.New(mock.Config{Name: "mock"})
+	svc := newTestService(pool, mockProv)
+
+	ref := createProcessingRefund(t, pool, svc, mockProv, 220)
+	if ref.ProviderRefundRef == nil || *ref.ProviderRefundRef == "" {
+		t.Fatal("expected provider_refund_ref to be set after ProcessRefund")
+	}
+
+	evt := provider.WebhookEvent{
+		ProviderRef: *ref.ProviderRefundRef,
+		Status:      provider.StatusSucceeded,
+		OccurredAt:  time.Now().UTC(),
+	}
+	if err := svc.ApplyProviderEvent(context.Background(), "mock", evt); err != nil {
+		t.Fatalf("ApplyProviderEvent: %v", err)
+	}
+
+	after, err := NewPGRepository(pool).GetRefund(context.Background(), ref.ID)
+	if err != nil {
+		t.Fatalf("GetRefund: %v", err)
+	}
+	if after.Status != StatusSucceeded {
+		t.Errorf("refund status after ApplyProviderEvent = %s, want succeeded", after.Status)
+	}
+}
+
+// TestService_ApplyProviderEvent_UnknownRefReturnsNotFound proves the
+// payment->refund->payout fallback chain still reports CodeNotFound (never
+// swallowing it into something else) once all three lookups miss --
+// rest/webhook.go's no-404 staging path depends on exactly this code.
+func TestService_ApplyProviderEvent_UnknownRefReturnsNotFound(t *testing.T) {
+	pool := testPool(t)
+	mockProv := mock.New(mock.Config{Name: "mock"})
+	svc := newTestService(pool, mockProv)
+
+	evt := provider.WebhookEvent{ProviderRef: uuid.NewString(), Status: provider.StatusSucceeded, OccurredAt: time.Now().UTC()}
+	err := svc.ApplyProviderEvent(context.Background(), "mock", evt)
+	if apperror.CodeOf(err) != apperror.CodeNotFound {
+		t.Errorf("CodeOf(err) = %v, want CodeNotFound (payment/refund/payout lookup chain exhausted)", apperror.CodeOf(err))
+	}
+}
+
+// TestService_SweepStagedWebhooks_ResolvesRefundStagedEvent is the sweep-side
+// analogue of TestService_SweepStagedWebhooks_ResolvesEventsStagedAfterInitialJoin,
+// applied to a refund instead of a payment -- a webhook staged for a
+// refund's provider_refund_ref must eventually resolve via the periodic
+// sweep, not sit in incoming_webhook_events forever.
+func TestService_SweepStagedWebhooks_ResolvesRefundStagedEvent(t *testing.T) {
+	pool := testPool(t)
+	stagingStore := webhook.NewStore(pool)
+	mockProv := mock.New(mock.Config{Name: "mock"})
+	svc := newTestService(pool, mockProv).WithWebhookStaging(stagingStore)
+
+	ref := createProcessingRefund(t, pool, svc, mockProv, 200)
+	if ref.ProviderRefundRef == nil || *ref.ProviderRefundRef == "" {
+		t.Fatal("expected provider_refund_ref to be set after ProcessRefund")
+	}
+
+	eventID := uuid.NewString()
+	payload, _ := json.Marshal(map[string]any{
+		"provider_event_id": eventID,
+		"provider_ref":      *ref.ProviderRefundRef,
+		"event_type":        "refund.succeeded",
+		"status":            "succeeded",
+		"occurred_at":       time.Now().UTC(),
+	})
+	if err := stagingStore.Stage(context.Background(), "mock", eventID, *ref.ProviderRefundRef, payload); err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+
+	matched, err := svc.SweepStagedWebhooks(context.Background())
+	if err != nil {
+		t.Fatalf("SweepStagedWebhooks: %v", err)
+	}
+	if matched < 1 {
+		t.Errorf("SweepStagedWebhooks matched %d pairs, want at least 1", matched)
+	}
+
+	after, err := NewPGRepository(pool).GetRefund(context.Background(), ref.ID)
+	if err != nil {
+		t.Fatalf("GetRefund: %v", err)
+	}
+	if after.Status != StatusSucceeded {
+		t.Errorf("refund status after sweep = %s, want succeeded", after.Status)
+	}
+
+	var refundID *uuid.UUID
+	if err := pool.QueryRow(context.Background(),
+		`SELECT refund_id FROM incoming_webhook_events WHERE provider = 'mock' AND event_id = $1`, eventID,
+	).Scan(&refundID); err != nil {
+		t.Fatalf("query staged row: %v", err)
+	}
+	if refundID == nil || *refundID != ref.ID {
+		t.Errorf("incoming_webhook_events.refund_id = %v, want %s", refundID, ref.ID)
 	}
 }

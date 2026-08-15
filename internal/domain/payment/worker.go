@@ -234,7 +234,10 @@ func (s *Service) ProcessCharge(ctx context.Context, in ChargeTaskInput) error {
 		parse := func(ctx context.Context, payload []byte) (provider.WebhookEvent, error) {
 			return prov.ParseWebhook(ctx, provider.ParseWebhookRequest{Body: payload})
 		}
-		if _, jerr := webhook.Join(ctx, s.staging, parse, s.ApplyProviderEvent, in.Provider, chargeResp.ProviderRef, in.PaymentID); jerr != nil {
+		markProcessed := func(ctx context.Context, stagedID uuid.UUID) error {
+			return s.staging.MarkProcessed(ctx, stagedID, in.PaymentID)
+		}
+		if _, jerr := webhook.Join(ctx, s.staging, parse, s.ApplyProviderEvent, in.Provider, chargeResp.ProviderRef, markProcessed); jerr != nil {
 			slog.Error("process charge: webhook join failed", "error", jerr, "payment_id", in.PaymentID, apperror.LogAttr(jerr))
 		}
 	}

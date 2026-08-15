@@ -13,6 +13,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
+
 	"Fisher-Mapper/internal/domain/apperror"
 	"Fisher-Mapper/internal/messaging/webhook"
 	"Fisher-Mapper/internal/provider"
@@ -67,7 +69,10 @@ func (s *Service) ReconcilePayment(ctx context.Context, p *Payment) error {
 		parse := func(ctx context.Context, payload []byte) (provider.WebhookEvent, error) {
 			return prov.ParseWebhook(ctx, provider.ParseWebhookRequest{Body: payload})
 		}
-		if _, jerr := webhook.Join(ctx, s.staging, parse, s.ApplyProviderEvent, p.Provider, *p.ProviderRef, p.ID); jerr != nil {
+		markProcessed := func(ctx context.Context, stagedID uuid.UUID) error {
+			return s.staging.MarkProcessed(ctx, stagedID, p.ID)
+		}
+		if _, jerr := webhook.Join(ctx, s.staging, parse, s.ApplyProviderEvent, p.Provider, *p.ProviderRef, markProcessed); jerr != nil {
 			slog.Error("reconcile payment: webhook join failed", "error", jerr, "payment_id", p.ID, apperror.LogAttr(jerr))
 		}
 	}
@@ -337,6 +342,86 @@ func (s *Service) ReconcileRefund(ctx context.Context, ref *Refund) error {
 	return nil
 }
 
+// stagedMatchKind distinguishes which table a resolveStagedMatch lookup
+// resolved to -- ApplyProviderEvent/SweepStagedWebhooks both need this to
+// pick the right ApplyTransition/MarkProcessed* variant, since a single
+// inbound webhook's provider ref could belong to any of the three (a
+// payment's own provider_ref, a refund's provider_refund_ref, or a payout's
+// own provider_ref).
+type stagedMatchKind int
+
+const (
+	stagedMatchPayment stagedMatchKind = iota
+	stagedMatchRefund
+	stagedMatchPayout
+)
+
+// stagedMatch is the result of resolveStagedMatch: which entity a
+// (provider, providerRef) pair belongs to, and its id.
+type stagedMatch struct {
+	kind stagedMatchKind
+	id   uuid.UUID
+}
+
+// markProcessed builds the webhook.MarkProcessedFunc closure matching this
+// match's kind -- staging is passed in rather than read off Service so this
+// stays usable from both ApplyProviderEvent (transport-agnostic, called
+// directly by rest/webhook.go too) and SweepStagedWebhooks.
+func (m stagedMatch) markProcessed(staging *webhook.Store) webhook.MarkProcessedFunc {
+	switch m.kind {
+	case stagedMatchRefund:
+		return func(ctx context.Context, stagedID uuid.UUID) error {
+			return staging.MarkProcessedRefund(ctx, stagedID, m.id)
+		}
+	case stagedMatchPayout:
+		return func(ctx context.Context, stagedID uuid.UUID) error {
+			return staging.MarkProcessedPayout(ctx, stagedID, m.id)
+		}
+	default:
+		return func(ctx context.Context, stagedID uuid.UUID) error {
+			return staging.MarkProcessed(ctx, stagedID, m.id)
+		}
+	}
+}
+
+// resolveStagedMatch tries payment, then refund (by provider_refund_ref --
+// deliberately NOT refunds.provider_ref, which CreateRefundWithOutbox copies
+// from the parent payment and would collide with the payment lookup above),
+// then payout, in that order. A single (provider, providerRef) pair can only
+// ever belong to one of the three: each is a reference the provider minted
+// independently for that specific operation.
+//
+// This is the HIGH finding's core fix: ApplyProviderEvent/SweepStagedWebhooks
+// previously only ever tried the payments table, so an inbound webhook
+// carrying a refund's or payout's own async-completion event got staged by
+// rest/webhook.go's no-404 handler and then could never be matched by
+// anything -- it sat in incoming_webhook_events permanently.
+func (s *Service) resolveStagedMatch(ctx context.Context, providerName, providerRef string) (*stagedMatch, error) {
+	if p, err := s.repo.FindByProviderRef(ctx, providerName, providerRef); err == nil {
+		return &stagedMatch{kind: stagedMatchPayment, id: p.ID}, nil
+	} else if apperror.CodeOf(err) != apperror.CodeNotFound {
+		return nil, err
+	}
+
+	if rr, rerr := s.refundRepo(); rerr == nil {
+		if ref, err := rr.FindRefundByProviderRefundRef(ctx, providerName, providerRef); err == nil {
+			return &stagedMatch{kind: stagedMatchRefund, id: ref.ID}, nil
+		} else if apperror.CodeOf(err) != apperror.CodeNotFound {
+			return nil, err
+		}
+	}
+
+	if pr, perr := s.payoutRepo(); perr == nil {
+		if po, err := pr.FindPayoutByProviderRef(ctx, providerName, providerRef); err == nil {
+			return &stagedMatch{kind: stagedMatchPayout, id: po.ID}, nil
+		} else if apperror.CodeOf(err) != apperror.CodeNotFound {
+			return nil, err
+		}
+	}
+
+	return nil, apperror.New(apperror.CodeNotFound, "payment: not found for provider ref")
+}
+
 // SweepStagedWebhooks re-attempts webhook.Join for every (provider,
 // provider_ref) pair still carrying unprocessed staged events — the "sweep
 // webhook events staged with no provider_ref match yet" gap the Fase 3
@@ -357,14 +442,21 @@ func (s *Service) SweepStagedWebhooks(ctx context.Context) (int, error) {
 
 	var matched int
 	for _, pair := range pairs {
-		p, err := s.repo.FindByProviderRef(ctx, pair.Provider, pair.ProviderRef)
+		// Try payment, then refund (by provider_refund_ref), then payout, in
+		// that order -- mirrors ApplyProviderEvent's own lookup chain. This
+		// sweep needs to know WHICH row matched (to build the right
+		// MarkProcessed* closure) before Join even runs, so it necessarily
+		// re-does the lookup ApplyProviderEvent will do again internally once
+		// it actually applies the transition -- the same duplication that
+		// already existed here for the payment-only case.
+		match, err := s.resolveStagedMatch(ctx, pair.Provider, pair.ProviderRef)
 		if err != nil {
 			if apperror.CodeOf(err) == apperror.CodeNotFound {
-				// Still no payment for this ref — leave staged, try again
-				// next sweep.
+				// Still no payment/refund/payout for this ref — leave staged,
+				// try again next sweep.
 				continue
 			}
-			slog.Error("sweep staged webhooks: find by provider ref", "error", err, "provider", pair.Provider, "provider_ref", pair.ProviderRef, apperror.LogAttr(err))
+			slog.Error("sweep staged webhooks: resolve match", "error", err, "provider", pair.Provider, "provider_ref", pair.ProviderRef, apperror.LogAttr(err))
 			continue
 		}
 
@@ -376,7 +468,7 @@ func (s *Service) SweepStagedWebhooks(ctx context.Context) (int, error) {
 		parse := func(ctx context.Context, payload []byte) (provider.WebhookEvent, error) {
 			return prov.ParseWebhook(ctx, provider.ParseWebhookRequest{Body: payload})
 		}
-		if _, jerr := webhook.Join(ctx, s.staging, parse, s.ApplyProviderEvent, pair.Provider, pair.ProviderRef, p.ID); jerr != nil {
+		if _, jerr := webhook.Join(ctx, s.staging, parse, s.ApplyProviderEvent, pair.Provider, pair.ProviderRef, match.markProcessed(s.staging)); jerr != nil {
 			slog.Error("sweep staged webhooks: join failed", "error", jerr, "provider", pair.Provider, "provider_ref", pair.ProviderRef, apperror.LogAttr(jerr))
 			continue
 		}
