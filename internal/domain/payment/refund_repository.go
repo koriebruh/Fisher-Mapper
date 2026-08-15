@@ -187,24 +187,48 @@ func (r *PGRepository) ApplyRefundTransition(ctx context.Context, params RefundT
 	return nil
 }
 
-func (r *PGRepository) GetRefund(ctx context.Context, id uuid.UUID) (*Refund, error) {
-	const selectSQL = `
-		SELECT id, payment_id, tenant_id, livemode, currency, amount, operation_type, provider,
+const refundSelectColumns = `id, payment_id, tenant_id, livemode, currency, amount, operation_type, provider,
 		       provider_ref, provider_refund_ref, status, last_event_at, created_at, updated_at,
-		       source_app, channel, trace_id, description, initiated_by, request_ip, request_user_agent
-		FROM refunds WHERE id = $1`
+		       source_app, channel, trace_id, description, initiated_by, request_ip, request_user_agent`
 
-	ref := &Refund{}
-	err := r.pool.QueryRow(ctx, selectSQL, id).Scan(
+func refundScanDest(ref *Refund) []any {
+	return []any{
 		&ref.ID, &ref.PaymentID, &ref.TenantID, &ref.Livemode, &ref.Currency, &ref.Amount, &ref.OperationType, &ref.Provider,
 		&ref.ProviderRef, &ref.ProviderRefundRef, &ref.Status, &ref.LastEventAt, &ref.CreatedAt, &ref.UpdatedAt,
 		&ref.SourceApp, &ref.Channel, &ref.TraceID, &ref.Description, &ref.InitiatedBy, &ref.RequestIP, &ref.RequestUserAgent,
-	)
+	}
+}
+
+// GetRefund fetches a refund by id only, with NO tenant scoping -- for
+// internal (non-caller-facing) callers, mirroring Repository.Get's doc
+// exactly. Never call this from a REST/gRPC handler serving an external
+// request -- see GetRefundForTenant.
+func (r *PGRepository) GetRefund(ctx context.Context, id uuid.UUID) (*Refund, error) {
+	selectSQL := `SELECT ` + refundSelectColumns + ` FROM refunds WHERE id = $1`
+
+	ref := &Refund{}
+	err := r.pool.QueryRow(ctx, selectSQL, id).Scan(refundScanDest(ref)...)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, apperror.New(apperror.CodeNotFound, "refund: not found")
 		}
 		return nil, fmt.Errorf("refund: get: %w", err)
+	}
+	return ref, nil
+}
+
+// GetRefundForTenant is GetRefund's tenant-scoped counterpart -- mirrors
+// Repository.GetForTenant's doc exactly (same not-found-not-leak guarantee).
+func (r *PGRepository) GetRefundForTenant(ctx context.Context, id uuid.UUID, tenantID string) (*Refund, error) {
+	selectSQL := `SELECT ` + refundSelectColumns + ` FROM refunds WHERE id = $1 AND tenant_id = $2`
+
+	ref := &Refund{}
+	err := r.pool.QueryRow(ctx, selectSQL, id, tenantID).Scan(refundScanDest(ref)...)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperror.New(apperror.CodeNotFound, "refund: not found")
+		}
+		return nil, fmt.Errorf("refund: get for tenant: %w", err)
 	}
 	return ref, nil
 }
@@ -218,6 +242,7 @@ type RefundRepository interface {
 	CreateRefundWithOutbox(ctx context.Context, ref *Refund, withTx func(ctx context.Context, tx pgx.Tx) error) error
 	ApplyRefundTransition(ctx context.Context, params RefundTransitionParams) error
 	GetRefund(ctx context.Context, id uuid.UUID) (*Refund, error)
+	GetRefundForTenant(ctx context.Context, id uuid.UUID, tenantID string) (*Refund, error)
 }
 
 var _ RefundRepository = (*PGRepository)(nil)

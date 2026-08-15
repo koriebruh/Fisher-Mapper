@@ -166,6 +166,10 @@ func payoutScanDest(p *Payout) []any {
 	}
 }
 
+// GetPayout fetches a payout by id only, with NO tenant scoping -- for
+// internal (non-caller-facing) callers, mirroring Repository.Get's doc
+// exactly. Never call this from a REST/gRPC handler serving an external
+// request -- see GetPayoutForTenant.
 func (r *PGRepository) GetPayout(ctx context.Context, id uuid.UUID) (*Payout, error) {
 	selectSQL := `SELECT ` + payoutSelectColumns + ` FROM payouts WHERE id = $1`
 
@@ -176,6 +180,22 @@ func (r *PGRepository) GetPayout(ctx context.Context, id uuid.UUID) (*Payout, er
 			return nil, apperror.New(apperror.CodeNotFound, "payout: not found")
 		}
 		return nil, fmt.Errorf("payout: get: %w", err)
+	}
+	return p, nil
+}
+
+// GetPayoutForTenant is GetPayout's tenant-scoped counterpart -- mirrors
+// Repository.GetForTenant's doc exactly (same not-found-not-leak guarantee).
+func (r *PGRepository) GetPayoutForTenant(ctx context.Context, id uuid.UUID, tenantID string) (*Payout, error) {
+	selectSQL := `SELECT ` + payoutSelectColumns + ` FROM payouts WHERE id = $1 AND tenant_id = $2`
+
+	p := &Payout{}
+	err := r.pool.QueryRow(ctx, selectSQL, id, tenantID).Scan(payoutScanDest(p)...)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, apperror.New(apperror.CodeNotFound, "payout: not found")
+		}
+		return nil, fmt.Errorf("payout: get for tenant: %w", err)
 	}
 	return p, nil
 }
@@ -221,6 +241,7 @@ type PayoutRepository interface {
 	ApplyPayoutTransition(ctx context.Context, params PayoutTransitionParams) error
 	SetPayoutProviderRef(ctx context.Context, id uuid.UUID, providerRef string) error
 	GetPayout(ctx context.Context, id uuid.UUID) (*Payout, error)
+	GetPayoutForTenant(ctx context.Context, id uuid.UUID, tenantID string) (*Payout, error)
 	ListPayoutsProcessingOlderThan(ctx context.Context, cutoff time.Time) ([]*Payout, error)
 }
 

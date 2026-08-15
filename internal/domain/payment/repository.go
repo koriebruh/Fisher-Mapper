@@ -76,7 +76,22 @@ type Repository interface {
 	// p.ID/CreatedAt/UpdatedAt/LastEventAt from the DB defaults.
 	Create(ctx context.Context, p *Payment) error
 
+	// Get fetches a payment by id only, with NO tenant scoping -- for
+	// internal (non-caller-facing) callers that already hold the row's own
+	// authority: the reconciliation sweep (reconcile.go re-fetches p.ID,
+	// which it already read off a query that returned this exact row) and
+	// the test suite's direct DB assertions. Never call this from a
+	// REST/gRPC handler serving an external request -- see GetForTenant.
 	Get(ctx context.Context, id uuid.UUID) (*Payment, error)
+
+	// GetForTenant is Get's tenant-scoped counterpart: the ONLY Get variant
+	// a caller-facing REST/gRPC handler may use, since a request UUID alone
+	// is guessable/enumerable and must never let one tenant read another
+	// tenant's payment (CRITICAL finding this method exists to close).
+	// Returns CodeNotFound -- not the row -- when id exists but belongs to a
+	// different tenant_id, so a cross-tenant probe looks identical to a
+	// nonexistent id.
+	GetForTenant(ctx context.Context, id uuid.UUID, tenantID string) (*Payment, error)
 
 	// FindByProviderRef looks up a payment by (provider, providerRef),
 	// used when applying a provider webhook event.
@@ -208,6 +223,23 @@ func (r *PGRepository) Get(ctx context.Context, id uuid.UUID) (*Payment, error) 
 			return nil, apperror.New(apperror.CodeNotFound, "payment: not found")
 		}
 		return nil, fmt.Errorf("payment: get: %w", err)
+	}
+	return p, nil
+}
+
+func (r *PGRepository) GetForTenant(ctx context.Context, id uuid.UUID, tenantID string) (*Payment, error) {
+	selectSQL := `SELECT ` + paymentSelectColumns + ` FROM payments WHERE id = $1 AND tenant_id = $2`
+
+	p := &Payment{}
+	err := r.pool.QueryRow(ctx, selectSQL, id, tenantID).Scan(paymentScanDest(p)...)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Deliberately the same message/code as a genuinely nonexistent
+			// id -- see the interface doc: a cross-tenant probe must not be
+			// distinguishable from a nonexistent one.
+			return nil, apperror.New(apperror.CodeNotFound, "payment: not found")
+		}
+		return nil, fmt.Errorf("payment: get for tenant: %w", err)
 	}
 	return p, nil
 }
