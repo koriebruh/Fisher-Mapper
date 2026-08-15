@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"Fisher-Mapper/internal/domain/apperror"
+	"Fisher-Mapper/internal/provider"
 	"Fisher-Mapper/internal/provider/mock"
 )
 
@@ -358,6 +359,52 @@ func TestService_ProcessRefund_ProviderDisabled_RejectedBeforeCAS(t *testing.T) 
 	}
 	if after.Status != StatusPending {
 		t.Errorf("refund status = %s, want still pending (CAS never ran)", after.Status)
+	}
+}
+
+// TestService_ProcessRefund_ProcessingPersistsProviderRefundRef is the HIGH
+// finding's core regression: a refund whose provider call returns
+// Processing (a common async-refund PSP behavior) must still persist
+// provider_refund_ref -- without it, reconciliation has no reference to
+// call GetStatus with, and the refund is stuck "processing" forever.
+func TestService_ProcessRefund_ProcessingPersistsProviderRefundRef(t *testing.T) {
+	pool := testPool(t)
+	// Default (succeeded) mock builds the parent payment first -- CreateRefund
+	// requires an already-succeeded payment -- then flips to Processing so
+	// ProcessRefund's own provider.Refund call reports "processing".
+	mockProv := mock.New(mock.Config{Name: "mock"})
+	svc := newTestService(pool, mockProv)
+
+	paymentID := createSucceededPayment(t, svc, 700)
+	mockProv.SetStatus(provider.StatusProcessing)
+	key := uuid.NewString()
+	out, err := svc.CreateRefund(context.Background(), CreateRefundInput{
+		PaymentID: paymentID, TenantID: uuid.NewString(), Amount: 250, Envelope: testEnvelope,
+	}, key, refundBodyFor(250))
+	if err != nil {
+		t.Fatalf("CreateRefund: %v", err)
+	}
+	ref, err := NewPGRepository(pool).GetRefund(context.Background(), out.RefundID)
+	if err != nil {
+		t.Fatalf("GetRefund: %v", err)
+	}
+
+	if err := svc.ProcessRefund(context.Background(), RefundTaskInput{
+		RefundID: ref.ID, PaymentID: paymentID, IdempotencyKey: key,
+		Amount: 250, Currency: "USD", Provider: "mock", PaymentProviderRef: derefOrEmpty(ref.ProviderRef),
+	}); err != nil {
+		t.Fatalf("ProcessRefund: %v", err)
+	}
+
+	after, err := NewPGRepository(pool).GetRefund(context.Background(), ref.ID)
+	if err != nil {
+		t.Fatalf("GetRefund: %v", err)
+	}
+	if after.Status != StatusProcessing {
+		t.Fatalf("refund status = %s, want still processing", after.Status)
+	}
+	if after.ProviderRefundRef == nil || *after.ProviderRefundRef == "" {
+		t.Errorf("provider_refund_ref = %v, want a persisted reference even though the refund stays processing", after.ProviderRefundRef)
 	}
 }
 

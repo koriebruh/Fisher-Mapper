@@ -302,6 +302,16 @@ func (s *Service) ProcessRefund(ctx context.Context, in RefundTaskInput) error {
 		}); err != nil {
 			return fmt.Errorf("process refund: apply result: %w", err)
 		}
+	} else if refundResp.ProviderRefundRef != "" {
+		// Processing/unknown: no transition to apply, but the provider DID
+		// hand back a reference for this refund -- persist it now (mirrors
+		// ProcessCharge/ProcessPayout's SetProviderRef fallback) so
+		// reconciliation has something to call GetStatus with later. Without
+		// this, a refund whose provider call returns "processing" has no
+		// path back to a terminal state at all.
+		if err := rr.SetRefundProviderRef(ctx, in.RefundID, refundResp.ProviderRefundRef); err != nil {
+			return fmt.Errorf("process refund: set provider refund ref: %w", err)
+		}
 	}
 
 	return nil

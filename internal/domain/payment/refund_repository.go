@@ -233,6 +233,26 @@ func (r *PGRepository) GetRefundForTenant(ctx context.Context, id uuid.UUID, ten
 	return ref, nil
 }
 
+// SetRefundProviderRef persists provider_refund_ref without changing status
+// -- mirrors Repository.SetProviderRef/PayoutRepository.SetPayoutProviderRef
+// exactly, for the identical reason: a provider call that returns a refund
+// reference but leaves the refund in its current state (still
+// "processing"/"unknown") cannot go through ApplyRefundTransition, which
+// rejects a same-status "transition" as invalid -- without this, a refund
+// whose provider call legitimately returns "processing" has no persisted
+// reference for reconciliation to query later.
+func (r *PGRepository) SetRefundProviderRef(ctx context.Context, id uuid.UUID, providerRefundRef string) error {
+	const updateSQL = `UPDATE refunds SET provider_refund_ref = $1, updated_at = now() WHERE id = $2`
+	tag, err := r.pool.Exec(ctx, updateSQL, providerRefundRef, id)
+	if err != nil {
+		return fmt.Errorf("refund: set provider refund ref: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return apperror.New(apperror.CodeNotFound, "refund: not found")
+	}
+	return nil
+}
+
 // RefundRepository is the subset of refund-related persistence Service
 // depends on, declared separately from Repository (which stays payment-only
 // in its doc comment / historical shape) so this file is the single place
@@ -243,6 +263,7 @@ type RefundRepository interface {
 	ApplyRefundTransition(ctx context.Context, params RefundTransitionParams) error
 	GetRefund(ctx context.Context, id uuid.UUID) (*Refund, error)
 	GetRefundForTenant(ctx context.Context, id uuid.UUID, tenantID string) (*Refund, error)
+	SetRefundProviderRef(ctx context.Context, id uuid.UUID, providerRefundRef string) error
 }
 
 var _ RefundRepository = (*PGRepository)(nil)
