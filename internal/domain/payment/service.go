@@ -385,8 +385,16 @@ func (s *Service) ApplyProviderEvent(ctx context.Context, providerName string, e
 // create-payment flow: since CreatePayment's response is always "pending",
 // callers poll this (via GET /payments/{id}) to observe the eventual
 // outcome ProcessCharge (or a later webhook) drives it to.
-func (s *Service) GetPayment(ctx context.Context, id uuid.UUID) (*Payment, error) {
-	return s.repo.Get(ctx, id)
+//
+// tenantID is the AUTHENTICATED caller's tenant (resolved by the REST
+// middleware/gRPC interceptor, never a URL/request value) -- this is the
+// ONLY Get path a REST/gRPC handler may call (CRITICAL fix: a payment id
+// alone is guessable/enumerable, and this used to be unscoped by tenant
+// entirely). A payment belonging to a different tenant reports
+// CodeNotFound, exactly like a nonexistent id -- see
+// Repository.GetForTenant's doc.
+func (s *Service) GetPayment(ctx context.Context, id uuid.UUID, tenantID string) (*Payment, error) {
+	return s.repo.GetForTenant(ctx, id, tenantID)
 }
 
 func (s *Service) completeIdempotency(ctx context.Context, tenantID, key string, statusCode int, out CreatePaymentOutput) error {

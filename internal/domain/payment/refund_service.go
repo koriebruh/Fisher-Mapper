@@ -308,13 +308,14 @@ func (s *Service) ProcessRefund(ctx context.Context, in RefundTaskInput) error {
 }
 
 // GetRefund fetches a refund by id -- the read side of the async refund
-// flow, mirroring GetPayment.
-func (s *Service) GetRefund(ctx context.Context, id uuid.UUID) (*Refund, error) {
+// flow, mirroring GetPayment (including tenantID's meaning: the
+// AUTHENTICATED caller's tenant, never a URL/request value).
+func (s *Service) GetRefund(ctx context.Context, id uuid.UUID, tenantID string) (*Refund, error) {
 	rr, err := s.refundRepo()
 	if err != nil {
 		return nil, err
 	}
-	return rr.GetRefund(ctx, id)
+	return rr.GetRefundForTenant(ctx, id, tenantID)
 }
 
 func (s *Service) pollForRefundCompletion(ctx context.Context, tenantID, key string) (CreateRefundOutput, bool) {

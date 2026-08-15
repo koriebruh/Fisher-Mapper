@@ -19,8 +19,12 @@ type PaymentDeps struct {
 
 // createPaymentRequest is the wire shape for POST /payments. Field names
 // intentionally mirror the domain's CreatePaymentInput.
+//
+// No tenant_id field (CRITICAL fix, removed on purpose): tenant identity now
+// comes from the AUTHENTICATED caller (tenantAuth middleware, see
+// tenantauth.go), never a client-supplied body value -- a caller could
+// otherwise claim to be any tenant it liked.
 type createPaymentRequest struct {
-	TenantID      string            `json:"tenant_id"`
 	Livemode      bool              `json:"livemode"`
 	Currency      string            `json:"currency"`
 	Amount        int64             `json:"amount"`
@@ -66,7 +70,7 @@ func handleCreatePayment(deps PaymentDeps) fiber.Handler {
 		}
 
 		input := payment.CreatePaymentInput{
-			TenantID:      req.TenantID,
+			TenantID:      tenantIDFromLocals(c),
 			Livemode:      req.Livemode,
 			Currency:      req.Currency,
 			Amount:        req.Amount,
@@ -156,7 +160,7 @@ func handleGetPayment(deps PaymentDeps) fiber.Handler {
 			return writeError(c, apperror.New(apperror.CodeValidation, "invalid payment id"))
 		}
 
-		p, err := deps.Service.GetPayment(c.UserContext(), id)
+		p, err := deps.Service.GetPayment(c.UserContext(), id, tenantIDFromLocals(c))
 		if err != nil {
 			return writeError(c, err)
 		}

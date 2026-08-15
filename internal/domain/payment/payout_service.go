@@ -312,13 +312,14 @@ func (s *Service) ProcessPayout(ctx context.Context, in PayoutTaskInput) error {
 }
 
 // GetPayout fetches a payout by id -- the read side of the async payout
-// flow, mirroring GetPayment/GetRefund.
-func (s *Service) GetPayout(ctx context.Context, id uuid.UUID) (*Payout, error) {
+// flow, mirroring GetPayment/GetRefund (including tenantID's meaning: the
+// AUTHENTICATED caller's tenant, never a URL/request value).
+func (s *Service) GetPayout(ctx context.Context, id uuid.UUID, tenantID string) (*Payout, error) {
 	pr, err := s.payoutRepo()
 	if err != nil {
 		return nil, err
 	}
-	return pr.GetPayout(ctx, id)
+	return pr.GetPayoutForTenant(ctx, id, tenantID)
 }
 
 // payoutRepo type-asserts s.repo to PayoutRepository -- mirrors refundRepo's

@@ -46,6 +46,7 @@ import (
 	"Fisher-Mapper/internal/platform/observability"
 	"Fisher-Mapper/internal/platform/queue"
 	"Fisher-Mapper/internal/platform/secrets/env"
+	"Fisher-Mapper/internal/platform/tenantauth"
 	"Fisher-Mapper/internal/resilience/ratelimit"
 	grpctransport "Fisher-Mapper/internal/transport/grpc"
 	paymentv1 "Fisher-Mapper/internal/transport/grpc/pb/payment/v1"
@@ -178,6 +179,12 @@ func run_() error {
 	webhookStore := webhook.NewStore(pool)
 	limiter := ratelimit.New(20, 40) // stub-cheap default: 20 req/s, burst 40, per client/API key
 
+	// CRITICAL fix: caller authentication. One shared *tenantauth.Store
+	// instance backs both transports below, same "one shared instance"
+	// pattern as limiter above (REST and gRPC must resolve api keys against
+	// the identical table, not two independently-configured stores).
+	tenantAuthStore := tenantauth.NewStore(pool)
+
 	// Fase 4 dynamic config: this process only ever WRITES app_config (via
 	// the admin endpoint below) and reads it back for that endpoint's GET
 	// -- it never gates a provider call itself (create-payment never calls
@@ -238,6 +245,7 @@ func run_() error {
 		DynamicConfigStore: dynamicStore,
 		DynamicConfigCache: dynamicCache,
 		AdminAPIKey:        adminAPIKey,
+		TenantAuthStore:    tenantAuthStore,
 		Metrics:            metrics,
 		MetricsHandler:     metricsHandler,
 	})
@@ -260,10 +268,19 @@ func run_() error {
 		// time here, exactly like otelfiber.Middleware does for the fiber
 		// app -- every RPC gets a span on the same trace pipeline REST uses.
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
-		// Same *ratelimit.Limiter instance the fiber payment group's
-		// middleware uses (see rest.NewApp) -- gRPC is not a way around
-		// REST's rate limiting.
-		grpc.UnaryInterceptor(grpctransport.RateLimitInterceptor(limiter, rateLimitEnabled)),
+		// ChainUnaryInterceptor (not a single UnaryInterceptor): both the
+		// existing rate limiter AND the CRITICAL-fix tenant-auth
+		// interceptor apply to every RPC, rate limiting first for the
+		// identical reason rest.NewApp orders its middleware that way (an
+		// unauthenticated flood should be throttled before the auth
+		// interceptor's Postgres lookup runs, not after). Same
+		// *ratelimit.Limiter/*tenantauth.Store instances the REST transport
+		// uses -- gRPC is not a way around either REST's rate limiting or
+		// its authentication.
+		grpc.ChainUnaryInterceptor(
+			grpctransport.RateLimitInterceptor(limiter, rateLimitEnabled),
+			grpctransport.TenantAuthInterceptor(tenantAuthStore),
+		),
 	)
 	paymentv1.RegisterPaymentServiceServer(grpcServer, grpctransport.NewServer(paymentService))
 	// grpcurl (used for manual/validation testing) needs either the .proto

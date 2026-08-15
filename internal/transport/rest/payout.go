@@ -14,8 +14,9 @@ import (
 // money-OUT operation, unlike refunds (which hang off an existing
 // payment): Provider and Destination are caller-supplied here, not derived
 // from a parent row.
+//
+// No tenant_id field -- see createPaymentRequest's doc, identical reasoning.
 type createPayoutRequest struct {
-	TenantID    string            `json:"tenant_id"`
 	Livemode    bool              `json:"livemode"`
 	Currency    string            `json:"currency"`
 	Amount      int64             `json:"amount"`
@@ -51,7 +52,7 @@ func handleCreatePayout(deps PaymentDeps) fiber.Handler {
 		}
 
 		input := payment.CreatePayoutInput{
-			TenantID:    req.TenantID,
+			TenantID:    tenantIDFromLocals(c),
 			Livemode:    req.Livemode,
 			Currency:    req.Currency,
 			Amount:      req.Amount,
@@ -124,7 +125,7 @@ func handleGetPayout(deps PaymentDeps) fiber.Handler {
 			return writeError(c, apperror.New(apperror.CodeValidation, "invalid payout id"))
 		}
 
-		p, err := deps.Service.GetPayout(c.UserContext(), id)
+		p, err := deps.Service.GetPayout(c.UserContext(), id, tenantIDFromLocals(c))
 		if err != nil {
 			return writeError(c, err)
 		}

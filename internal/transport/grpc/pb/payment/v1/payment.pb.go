@@ -24,10 +24,15 @@ const (
 // CreatePaymentRequest mirrors REST's createPaymentRequest body plus the
 // Idempotency-Key header — gRPC has no header equivalent a client reliably
 // sets, so idempotency_key is a first-class message field instead.
+// CreatePaymentRequest has no tenant_id field (reserved, not removed --
+// field 2 must never be reused by a future field): tenant identity now
+// comes from the AUTHENTICATED caller (the x-api-key metadata resolved by
+// grpc.TenantAuthInterceptor, see internal/transport/grpc/interceptor_auth.go),
+// never a client-supplied value -- a request could otherwise claim any
+// tenant it liked (the CRITICAL finding this change closes).
 type CreatePaymentRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	IdempotencyKey string                 `protobuf:"bytes,1,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
-	TenantId       string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	Livemode       bool                   `protobuf:"varint,3,opt,name=livemode,proto3" json:"livemode,omitempty"`
 	Currency       string                 `protobuf:"bytes,4,opt,name=currency,proto3" json:"currency,omitempty"`
 	// amount is minor units (cents) — int64, never a float. Locked money
@@ -79,13 +84,6 @@ func (*CreatePaymentRequest) Descriptor() ([]byte, []int) {
 func (x *CreatePaymentRequest) GetIdempotencyKey() string {
 	if x != nil {
 		return x.IdempotencyKey
-	}
-	return ""
-}
-
-func (x *CreatePaymentRequest) GetTenantId() string {
-	if x != nil {
-		return x.TenantId
 	}
 	return ""
 }
@@ -810,10 +808,11 @@ func (x *GetRefundResponse) GetRequestUserAgent() string {
 // CreatePayoutRequest has no counterpart-derived fields (unlike
 // CreateRefundRequest): a payout is standalone, so provider/destination are
 // caller-supplied here, not derived server-side from a parent row.
+// CreatePayoutRequest has no tenant_id field -- see CreatePaymentRequest's
+// doc, identical reasoning.
 type CreatePayoutRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	IdempotencyKey string                 `protobuf:"bytes,1,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
-	TenantId       string                 `protobuf:"bytes,2,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	Livemode       bool                   `protobuf:"varint,3,opt,name=livemode,proto3" json:"livemode,omitempty"`
 	Currency       string                 `protobuf:"bytes,4,opt,name=currency,proto3" json:"currency,omitempty"`
 	Amount         int64                  `protobuf:"varint,5,opt,name=amount,proto3" json:"amount,omitempty"`
@@ -861,13 +860,6 @@ func (*CreatePayoutRequest) Descriptor() ([]byte, []int) {
 func (x *CreatePayoutRequest) GetIdempotencyKey() string {
 	if x != nil {
 		return x.IdempotencyKey
-	}
-	return ""
-}
-
-func (x *CreatePayoutRequest) GetTenantId() string {
-	if x != nil {
-		return x.TenantId
 	}
 	return ""
 }
@@ -1219,10 +1211,9 @@ var File_payment_v1_payment_proto protoreflect.FileDescriptor
 const file_payment_v1_payment_proto_rawDesc = "" +
 	"\n" +
 	"\x18payment/v1/payment.proto\x12\n" +
-	"payment.v1\"\xb9\x03\n" +
+	"payment.v1\"\xad\x03\n" +
 	"\x14CreatePaymentRequest\x12'\n" +
-	"\x0fidempotency_key\x18\x01 \x01(\tR\x0eidempotencyKey\x12\x1b\n" +
-	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x1a\n" +
+	"\x0fidempotency_key\x18\x01 \x01(\tR\x0eidempotencyKey\x12\x1a\n" +
 	"\blivemode\x18\x03 \x01(\bR\blivemode\x12\x1a\n" +
 	"\bcurrency\x18\x04 \x01(\tR\bcurrency\x12\x16\n" +
 	"\x06amount\x18\x05 \x01(\x03R\x06amount\x12\x1a\n" +
@@ -1235,7 +1226,7 @@ const file_payment_v1_payment_proto_rawDesc = "" +
 	" \x01(\tR\vdescription\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8d\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x02\x10\x03R\ttenant_id\"\x8d\x01\n" +
 	"\x15CreatePaymentResponse\x12\x1d\n" +
 	"\n" +
 	"payment_id\x18\x01 \x01(\tR\tpaymentId\x12\x16\n" +
@@ -1304,10 +1295,9 @@ const file_payment_v1_payment_proto_rawDesc = "" +
 	"\finitiated_by\x18\x0f \x01(\tR\vinitiatedBy\x12\x1d\n" +
 	"\n" +
 	"request_ip\x18\x10 \x01(\tR\trequestIp\x12,\n" +
-	"\x12request_user_agent\x18\x11 \x01(\tR\x10requestUserAgent\"\xb2\x03\n" +
+	"\x12request_user_agent\x18\x11 \x01(\tR\x10requestUserAgent\"\xa6\x03\n" +
 	"\x13CreatePayoutRequest\x12'\n" +
-	"\x0fidempotency_key\x18\x01 \x01(\tR\x0eidempotencyKey\x12\x1b\n" +
-	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x1a\n" +
+	"\x0fidempotency_key\x18\x01 \x01(\tR\x0eidempotencyKey\x12\x1a\n" +
 	"\blivemode\x18\x03 \x01(\bR\blivemode\x12\x1a\n" +
 	"\bcurrency\x18\x04 \x01(\tR\bcurrency\x12\x16\n" +
 	"\x06amount\x18\x05 \x01(\x03R\x06amount\x12\x1a\n" +
@@ -1320,7 +1310,7 @@ const file_payment_v1_payment_proto_rawDesc = "" +
 	" \x01(\tR\vdescription\x1a;\n" +
 	"\rMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8a\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x02\x10\x03R\ttenant_id\"\x8a\x01\n" +
 	"\x14CreatePayoutResponse\x12\x1b\n" +
 	"\tpayout_id\x18\x01 \x01(\tR\bpayoutId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12!\n" +

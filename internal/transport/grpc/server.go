@@ -73,7 +73,10 @@ func fingerprintBasis(v any) ([]byte, error) {
 // provider call -- see the proto doc on CreatePayment.
 func (s *Server) CreatePayment(ctx context.Context, req *pb.CreatePaymentRequest) (*pb.CreatePaymentResponse, error) {
 	in := payment.CreatePaymentInput{
-		TenantID:      req.GetTenantId(),
+		// TenantID comes from the AUTHENTICATED caller (TenantAuthInterceptor),
+		// never the request -- CreatePaymentRequest has no tenant_id field
+		// (see its proto doc) precisely so this can never be anything else.
+		TenantID:      tenantIDFromContext(ctx),
 		Livemode:      req.GetLivemode(),
 		Currency:      req.GetCurrency(),
 		Amount:        req.GetAmount(),
@@ -106,15 +109,18 @@ func (s *Server) CreatePayment(ctx context.Context, req *pb.CreatePaymentRequest
 
 // GetPayment mirrors rest.handleGetPayment, but returns the full payment
 // row (REST's paymentView is deliberately narrower -- id/status/provider_ref
-// only -- for this transport there is no reason to hide the rest of the
-// row from an authenticated RPC caller).
+// only -- for this transport there is no reason to hide the rest of the row
+// from an authenticated RPC caller). "Authenticated" is no longer aspirational
+// here: TenantAuthInterceptor (cmd/server wiring) resolves the caller's
+// tenant_id and GetPayment is scoped to it below, so a request UUID that
+// belongs to a different tenant reports CodeNotFound, never that tenant's row.
 func (s *Server) GetPayment(ctx context.Context, req *pb.GetPaymentRequest) (*pb.GetPaymentResponse, error) {
 	id, err := uuid.Parse(req.GetPaymentId())
 	if err != nil {
 		return nil, statusFromError(apperror.New(apperror.CodeValidation, "invalid payment id"))
 	}
 
-	p, err := s.service.GetPayment(ctx, id)
+	p, err := s.service.GetPayment(ctx, id, tenantIDFromContext(ctx))
 	if err != nil {
 		return nil, statusFromError(err)
 	}
@@ -146,14 +152,16 @@ func (s *Server) GetPayment(ctx context.Context, req *pb.GetPaymentRequest) (*pb
 // CreateRefund mirrors rest.handleCreateRefund: fetch the parent payment
 // first (so TenantID/Livemode are derived server-side, never client-
 // supplied -- see the proto doc on CreateRefundRequest), then call
-// payment.Service.CreateRefund.
+// payment.Service.CreateRefund. The fetch is tenant-scoped to the
+// AUTHENTICATED caller, so a request naming another tenant's payment id
+// reports CodeNotFound rather than creating a refund against it.
 func (s *Server) CreateRefund(ctx context.Context, req *pb.CreateRefundRequest) (*pb.CreateRefundResponse, error) {
 	paymentID, err := uuid.Parse(req.GetPaymentId())
 	if err != nil {
 		return nil, statusFromError(apperror.New(apperror.CodeValidation, "invalid payment id"))
 	}
 
-	p, err := s.service.GetPayment(ctx, paymentID)
+	p, err := s.service.GetPayment(ctx, paymentID, tenantIDFromContext(ctx))
 	if err != nil {
 		return nil, statusFromError(err)
 	}
@@ -189,14 +197,14 @@ func (s *Server) CreateRefund(ctx context.Context, req *pb.CreateRefundRequest) 
 }
 
 // GetRefund mirrors rest.handleGetRefund (again returning the full row, see
-// GetPayment's doc for why).
+// GetPayment's doc for why, including the tenant-scoping).
 func (s *Server) GetRefund(ctx context.Context, req *pb.GetRefundRequest) (*pb.GetRefundResponse, error) {
 	id, err := uuid.Parse(req.GetRefundId())
 	if err != nil {
 		return nil, statusFromError(apperror.New(apperror.CodeValidation, "invalid refund id"))
 	}
 
-	r, err := s.service.GetRefund(ctx, id)
+	r, err := s.service.GetRefund(ctx, id, tenantIDFromContext(ctx))
 	if err != nil {
 		return nil, statusFromError(err)
 	}
@@ -233,7 +241,9 @@ func (s *Server) GetRefund(ctx context.Context, req *pb.GetRefundRequest) (*pb.G
 // -- provider/destination come straight from the request.
 func (s *Server) CreatePayout(ctx context.Context, req *pb.CreatePayoutRequest) (*pb.CreatePayoutResponse, error) {
 	in := payment.CreatePayoutInput{
-		TenantID:    req.GetTenantId(),
+		// TenantID comes from the AUTHENTICATED caller -- see CreatePayment's
+		// identical comment.
+		TenantID:    tenantIDFromContext(ctx),
 		Livemode:    req.GetLivemode(),
 		Currency:    req.GetCurrency(),
 		Amount:      req.GetAmount(),
@@ -264,14 +274,14 @@ func (s *Server) CreatePayout(ctx context.Context, req *pb.CreatePayoutRequest) 
 }
 
 // GetPayout mirrors rest.handleGetPayout, returning the full row (same
-// reasoning as GetPayment/GetRefund's doc).
+// reasoning as GetPayment/GetRefund's doc, including the tenant-scoping).
 func (s *Server) GetPayout(ctx context.Context, req *pb.GetPayoutRequest) (*pb.GetPayoutResponse, error) {
 	id, err := uuid.Parse(req.GetPayoutId())
 	if err != nil {
 		return nil, statusFromError(apperror.New(apperror.CodeValidation, "invalid payout id"))
 	}
 
-	p, err := s.service.GetPayout(ctx, id)
+	p, err := s.service.GetPayout(ctx, id, tenantIDFromContext(ctx))
 	if err != nil {
 		return nil, statusFromError(err)
 	}

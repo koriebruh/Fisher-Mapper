@@ -42,9 +42,16 @@ service PaymentService {
 // CreatePaymentRequest mirrors REST's createPaymentRequest body plus the
 // Idempotency-Key header — gRPC has no header equivalent a client reliably
 // sets, so idempotency_key is a first-class message field instead.
+// CreatePaymentRequest has no tenant_id field (reserved, not removed --
+// field 2 must never be reused by a future field): tenant identity now
+// comes from the AUTHENTICATED caller (the x-api-key metadata resolved by
+// grpc.TenantAuthInterceptor, see internal/transport/grpc/interceptor_auth.go),
+// never a client-supplied value -- a request could otherwise claim any
+// tenant it liked (the CRITICAL finding this change closes).
 message CreatePaymentRequest {
+  reserved 2;
+  reserved "tenant_id";
   string idempotency_key = 1;
-  string tenant_id = 2;
   bool livemode = 3;
   string currency = 4;
   // amount is minor units (cents) — int64, never a float. Locked money
@@ -151,9 +158,12 @@ message GetRefundResponse {
 // CreatePayoutRequest has no counterpart-derived fields (unlike
 // CreateRefundRequest): a payout is standalone, so provider/destination are
 // caller-supplied here, not derived server-side from a parent row.
+// CreatePayoutRequest has no tenant_id field -- see CreatePaymentRequest's
+// doc, identical reasoning.
 message CreatePayoutRequest {
+  reserved 2;
+  reserved "tenant_id";
   string idempotency_key = 1;
-  string tenant_id = 2;
   bool livemode = 3;
   string currency = 4;
   int64 amount = 5;

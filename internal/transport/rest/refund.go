@@ -45,7 +45,10 @@ func handleCreateRefund(deps PaymentDeps) fiber.Handler {
 			}
 		}
 
-		p, err := deps.Service.GetPayment(c.UserContext(), paymentID)
+		// Tenant-scoped: a caller can only refund a payment its OWN
+		// authenticated tenant owns -- naming another tenant's payment id
+		// here now reports CodeNotFound, not a cross-tenant refund.
+		p, err := deps.Service.GetPayment(c.UserContext(), paymentID, tenantIDFromLocals(c))
 		if err != nil {
 			return writeError(c, err)
 		}
@@ -124,7 +127,7 @@ func handleGetRefund(deps PaymentDeps) fiber.Handler {
 			return writeError(c, apperror.New(apperror.CodeValidation, "invalid refund id"))
 		}
 
-		r, err := deps.Service.GetRefund(c.UserContext(), id)
+		r, err := deps.Service.GetRefund(c.UserContext(), id, tenantIDFromLocals(c))
 		if err != nil {
 			return writeError(c, err)
 		}

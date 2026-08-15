@@ -16,6 +16,7 @@ import (
 	"Fisher-Mapper/internal/platform/config"
 	"Fisher-Mapper/internal/platform/observability"
 	"Fisher-Mapper/internal/platform/queue"
+	"Fisher-Mapper/internal/platform/tenantauth"
 	"Fisher-Mapper/internal/provider"
 	"Fisher-Mapper/internal/provider/auth"
 	"Fisher-Mapper/internal/resilience/ratelimit"
@@ -44,6 +45,13 @@ type Deps struct {
 	DynamicConfigStore *config.DynamicStore
 	DynamicConfigCache *config.Cache
 	AdminAPIKey        string
+	// TenantAuthStore backs tenantAuth, the CRITICAL-fix caller-authentication
+	// middleware applied to the payment/refund/payout route groups below.
+	// Unlike RateLimiter, this is NOT optional in practice once PaymentService
+	// is set: tenantAuth fails closed (401) when Store is nil, same stance as
+	// adminAuth's empty-APIKey handling -- there is no "auth disabled" mode
+	// for a money-moving endpoint.
+	TenantAuthStore *tenantauth.Store
 	// Metrics and MetricsHandler are Fase 5 additions (either nil disables
 	// the corresponding piece -- e.g. in tests that don't care about
 	// metrics). Metrics backs the per-request latency middleware;
@@ -82,8 +90,12 @@ func NewApp(deps Deps) *fiber.App {
 	if deps.PaymentService != nil {
 		paymentGroup := app.Group("/payments")
 		if deps.RateLimiter != nil {
+			// Rate-limit before auth: tenantAuth does a Postgres lookup per
+			// request, so an unauthenticated flood should be throttled
+			// before it ever reaches that query, not after.
 			paymentGroup.Use(ratelimit.Middleware(deps.RateLimiter, nil, deps.RateLimitEnabled))
 		}
+		paymentGroup.Use(tenantAuth(deps.TenantAuthStore))
 		RegisterPaymentRoutes(paymentGroup, PaymentDeps{Service: deps.PaymentService})
 		RegisterRefundRoutes(paymentGroup, PaymentDeps{Service: deps.PaymentService})
 
@@ -94,6 +106,7 @@ func NewApp(deps Deps) *fiber.App {
 		if deps.RateLimiter != nil {
 			payoutGroup.Use(ratelimit.Middleware(deps.RateLimiter, nil, deps.RateLimitEnabled))
 		}
+		payoutGroup.Use(tenantAuth(deps.TenantAuthStore))
 		RegisterPayoutRoutes(payoutGroup, PaymentDeps{Service: deps.PaymentService})
 	}
 
