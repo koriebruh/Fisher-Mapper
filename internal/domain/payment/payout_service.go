@@ -240,15 +240,15 @@ func (s *Service) ProcessPayout(ctx context.Context, in PayoutTaskInput) error {
 	}
 
 	if !s.isProviderEnabled(in.Provider) {
-		slog.Error("process payout: provider disabled between CAS and provider call, payout stuck processing with no provider_ref",
-			"layer", "worker", "source", apperror.SourceInternal, "provider", in.Provider, "payout_id", in.PayoutID)
+		slog.Error("[worker] ProcessPayout: provider disabled between CAS and provider call, payout stuck processing with no provider_ref",
+			"component", "worker", "layer", "worker", "source", apperror.SourceInternal, "provider", in.Provider, "payout_id", in.PayoutID)
 		return nil
 	}
 
 	breaker := s.breakerFor(in.Provider)
 	if breaker != nil && !breaker.Allow() {
-		slog.Warn("process payout: circuit breaker open, skipping provider call",
-			"layer", "worker", "source", apperror.SourceInternal, "provider", in.Provider, "payout_id", in.PayoutID)
+		slog.Warn("[worker] ProcessPayout: circuit breaker open, skipping provider call",
+			"component", "worker", "layer", "worker", "source", apperror.SourceInternal, "provider", in.Provider, "payout_id", in.PayoutID)
 		return nil
 	}
 
@@ -279,8 +279,8 @@ func (s *Service) ProcessPayout(ctx context.Context, in PayoutTaskInput) error {
 		// than falling through CodeOf's CodeInternal default, which would
 		// mislabel a PJP failure as a bug in this codebase.
 		wrapped := apperror.Wrap(apperror.CodeProviderError, "process payout: provider call failed", payoutErr)
-		slog.Warn("process payout: provider call failed, no auto-retry, staying processing",
-			"layer", "worker", "provider", in.Provider, "payout_id", in.PayoutID, "error", payoutErr, apperror.LogAttr(wrapped))
+		slog.Warn("[worker] ProcessPayout: provider call failed, no auto-retry, staying processing",
+			"component", "worker", "layer", "worker", "provider", in.Provider, "payout_id", in.PayoutID, "error", payoutErr, apperror.LogAttr(wrapped))
 		// See method doc: never retried, payout stays "processing".
 		return nil
 	}

@@ -73,7 +73,7 @@ func (s *Service) ReconcilePayment(ctx context.Context, p *Payment) error {
 			return s.staging.MarkProcessed(ctx, stagedID, p.ID)
 		}
 		if _, jerr := webhook.Join(ctx, s.staging, parse, s.ApplyProviderEvent, p.Provider, *p.ProviderRef, markProcessed); jerr != nil {
-			slog.Error("reconcile payment: webhook join failed", "error", jerr, "payment_id", p.ID, apperror.LogAttr(jerr))
+			slog.Error("[reconciliation] ReconcilePayment: webhook join failed", "component", "reconciliation", "error", jerr, "payment_id", p.ID, apperror.LogAttr(jerr))
 		}
 	}
 
@@ -86,8 +86,8 @@ func (s *Service) ReconcilePayment(ctx context.Context, p *Payment) error {
 		return nil
 	}
 	if fresh.ProviderRef == nil {
-		slog.Warn("reconcile payment: stuck processing with no provider_ref, cannot query GetStatus (known gap)",
-			"source", apperror.SourceInternal, "payment_id", p.ID)
+		slog.Warn("[reconciliation] ReconcilePayment: stuck processing with no provider_ref, cannot query GetStatus (known gap)",
+			"component", "reconciliation", "source", apperror.SourceInternal, "payment_id", p.ID)
 		return nil
 	}
 
@@ -97,7 +97,7 @@ func (s *Service) ReconcilePayment(ctx context.Context, p *Payment) error {
 		// *apperror.Error) -- wrap as CodeProviderError so LogAttr classifies
 		// it as SourceProvider, not SourceInternal.
 		wrapped := apperror.Wrap(apperror.CodeProviderError, "reconcile payment: GetStatus failed", err)
-		slog.Warn("reconcile payment: GetStatus failed, will retry next cycle", "error", err, "payment_id", p.ID, apperror.LogAttr(wrapped))
+		slog.Warn("[reconciliation] ReconcilePayment: GetStatus failed, will retry next cycle", "component", "reconciliation", "error", err, "payment_id", p.ID, apperror.LogAttr(wrapped))
 		return nil
 	}
 
@@ -114,8 +114,8 @@ func (s *Service) ReconcilePayment(ctx context.Context, p *Payment) error {
 	}
 
 	if statusResp.Amount != fresh.Amount || statusResp.Currency != fresh.Currency {
-		slog.Error("reconciliation mismatch: GetStatus amount/currency does not match stored payment, refusing to apply",
-			"source", apperror.SourceProvider, "payment_id", p.ID,
+		slog.Error("[reconciliation] ReconcilePayment: mismatch, refusing to apply",
+			"component", "reconciliation", "source", apperror.SourceProvider, "payment_id", p.ID,
 			"stored_amount", fresh.Amount, "stored_currency", fresh.Currency,
 			"provider_amount", statusResp.Amount, "provider_currency", statusResp.Currency)
 		if s.onReconciliationMismatch != nil {
@@ -189,8 +189,8 @@ func (s *Service) ReconcilePayout(ctx context.Context, p *Payout) error {
 		return nil
 	}
 	if fresh.ProviderRef == nil {
-		slog.Warn("reconcile payout: stuck processing with no provider_ref, cannot query GetStatus (known gap)",
-			"layer", "reconciliation", "source", apperror.SourceInternal, "payout_id", p.ID)
+		slog.Warn("[reconciliation] ReconcilePayout: stuck processing with no provider_ref, cannot query GetStatus (known gap)",
+			"component", "reconciliation", "layer", "reconciliation", "source", apperror.SourceInternal, "payout_id", p.ID)
 		return nil
 	}
 
@@ -200,8 +200,8 @@ func (s *Service) ReconcilePayout(ctx context.Context, p *Payout) error {
 		// *apperror.Error) -- wrap as CodeProviderError so LogAttr classifies
 		// it as SourceProvider, not SourceInternal.
 		wrapped := apperror.Wrap(apperror.CodeProviderError, "reconcile payout: GetStatus failed", err)
-		slog.Warn("reconcile payout: GetStatus failed, will retry next cycle",
-			"layer", "reconciliation", "error", err, "payout_id", p.ID, apperror.LogAttr(wrapped))
+		slog.Warn("[reconciliation] ReconcilePayout: GetStatus failed, will retry next cycle",
+			"component", "reconciliation", "layer", "reconciliation", "error", err, "payout_id", p.ID, apperror.LogAttr(wrapped))
 		return nil
 	}
 
@@ -216,8 +216,8 @@ func (s *Service) ReconcilePayout(ctx context.Context, p *Payout) error {
 	}
 
 	if statusResp.Amount != fresh.Amount || statusResp.Currency != fresh.Currency {
-		slog.Error("reconciliation mismatch: GetStatus amount/currency does not match stored payout, refusing to apply",
-			"layer", "reconciliation", "source", apperror.SourceProvider, "payout_id", p.ID,
+		slog.Error("[reconciliation] ReconcilePayout: mismatch, refusing to apply",
+			"component", "reconciliation", "layer", "reconciliation", "source", apperror.SourceProvider, "payout_id", p.ID,
 			"stored_amount", fresh.Amount, "stored_currency", fresh.Currency,
 			"provider_amount", statusResp.Amount, "provider_currency", statusResp.Currency)
 		if s.onReconciliationMismatch != nil {
@@ -288,8 +288,8 @@ func (s *Service) ReconcileRefund(ctx context.Context, ref *Refund) error {
 		return nil
 	}
 	if fresh.ProviderRefundRef == nil {
-		slog.Warn("reconcile refund: stuck processing with no provider_refund_ref, cannot query GetStatus (known gap)",
-			"source", apperror.SourceInternal, "refund_id", ref.ID)
+		slog.Warn("[reconciliation] ReconcileRefund: stuck processing with no provider_refund_ref, cannot query GetStatus (known gap)",
+			"component", "reconciliation", "source", apperror.SourceInternal, "refund_id", ref.ID)
 		return nil
 	}
 
@@ -299,7 +299,7 @@ func (s *Service) ReconcileRefund(ctx context.Context, ref *Refund) error {
 		// *apperror.Error) -- wrap as CodeProviderError so LogAttr classifies
 		// it as SourceProvider, not SourceInternal.
 		wrapped := apperror.Wrap(apperror.CodeProviderError, "reconcile refund: GetStatus failed", err)
-		slog.Warn("reconcile refund: GetStatus failed, will retry next cycle", "error", err, "refund_id", ref.ID, apperror.LogAttr(wrapped))
+		slog.Warn("[reconciliation] ReconcileRefund: GetStatus failed, will retry next cycle", "component", "reconciliation", "error", err, "refund_id", ref.ID, apperror.LogAttr(wrapped))
 		return nil
 	}
 
@@ -314,8 +314,8 @@ func (s *Service) ReconcileRefund(ctx context.Context, ref *Refund) error {
 	}
 
 	if statusResp.Amount != fresh.Amount || statusResp.Currency != fresh.Currency {
-		slog.Error("reconciliation mismatch: GetStatus amount/currency does not match stored refund, refusing to apply",
-			"source", apperror.SourceProvider, "refund_id", ref.ID,
+		slog.Error("[reconciliation] ReconcileRefund: mismatch, refusing to apply",
+			"component", "reconciliation", "source", apperror.SourceProvider, "refund_id", ref.ID,
 			"stored_amount", fresh.Amount, "stored_currency", fresh.Currency,
 			"provider_amount", statusResp.Amount, "provider_currency", statusResp.Currency)
 		if s.onReconciliationMismatch != nil {
@@ -456,20 +456,20 @@ func (s *Service) SweepStagedWebhooks(ctx context.Context) (int, error) {
 				// try again next sweep.
 				continue
 			}
-			slog.Error("sweep staged webhooks: resolve match", "error", err, "provider", pair.Provider, "provider_ref", pair.ProviderRef, apperror.LogAttr(err))
+			slog.Error("[reconciliation] SweepStagedWebhooks: resolve match", "component", "reconciliation", "error", err, "provider", pair.Provider, "provider_ref", pair.ProviderRef, apperror.LogAttr(err))
 			continue
 		}
 
 		prov, err := s.providers.Get(pair.Provider)
 		if err != nil {
-			slog.Error("sweep staged webhooks: provider lookup", "error", err, "provider", pair.Provider, apperror.LogAttr(err))
+			slog.Error("[reconciliation] SweepStagedWebhooks: provider lookup", "component", "reconciliation", "error", err, "provider", pair.Provider, apperror.LogAttr(err))
 			continue
 		}
 		parse := func(ctx context.Context, payload []byte) (provider.WebhookEvent, error) {
 			return prov.ParseWebhook(ctx, provider.ParseWebhookRequest{Body: payload})
 		}
 		if _, jerr := webhook.Join(ctx, s.staging, parse, s.ApplyProviderEvent, pair.Provider, pair.ProviderRef, match.markProcessed(s.staging)); jerr != nil {
-			slog.Error("sweep staged webhooks: join failed", "error", jerr, "provider", pair.Provider, "provider_ref", pair.ProviderRef, apperror.LogAttr(jerr))
+			slog.Error("[reconciliation] SweepStagedWebhooks: join failed", "component", "reconciliation", "error", jerr, "provider", pair.Provider, "provider_ref", pair.ProviderRef, apperror.LogAttr(jerr))
 			continue
 		}
 		matched++
