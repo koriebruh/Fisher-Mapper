@@ -108,55 +108,55 @@ func (j *Job) RunOnce(ctx context.Context) {
 
 func (j *Job) runOnce(ctx context.Context) {
 	if j.enabled != nil && !j.enabled() {
-		slog.Debug("reconciliation: pass skipped, disabled via dynamic config")
+		slog.Debug("[reconciliation] runOnce: pass skipped, disabled via dynamic config", "component", "reconciliation")
 		return
 	}
 
 	stuck, err := j.service.ListStuckProcessing(ctx, j.threshold)
 	if err != nil {
-		slog.Error("reconciliation: list stuck processing", "layer", "reconciliation", "error", err, apperror.LogAttr(err))
+		slog.Error("[reconciliation] runOnce: list stuck processing", "component", "reconciliation", "layer", "reconciliation", "error", err, apperror.LogAttr(err))
 	} else {
 		for _, p := range stuck {
 			if err := j.service.ReconcilePayment(ctx, p); err != nil {
-				slog.Error("reconciliation: resolve payment", "layer", "reconciliation", "error", err, "payment_id", p.ID, apperror.LogAttr(err))
+				slog.Error("[reconciliation] runOnce: resolve payment", "component", "reconciliation", "layer", "reconciliation", "error", err, "payment_id", p.ID, apperror.LogAttr(err))
 			}
 		}
 		if len(stuck) > 0 {
-			slog.Info("reconciliation: pass complete", "stuck_payments_seen", len(stuck))
+			slog.Info("[reconciliation] runOnce: pass complete", "component", "reconciliation", "stuck_payments_seen", len(stuck))
 		}
 	}
 
 	stuckPayouts, err := j.service.ListStuckPayouts(ctx, j.threshold)
 	if err != nil {
-		slog.Error("reconciliation: list stuck payouts", "layer", "reconciliation", "error", err, apperror.LogAttr(err))
+		slog.Error("[reconciliation] runOnce: list stuck payouts", "component", "reconciliation", "layer", "reconciliation", "error", err, apperror.LogAttr(err))
 	} else {
 		for _, p := range stuckPayouts {
 			if err := j.service.ReconcilePayout(ctx, p); err != nil {
-				slog.Error("reconciliation: resolve payout", "layer", "reconciliation", "error", err, "payout_id", p.ID, apperror.LogAttr(err))
+				slog.Error("[reconciliation] runOnce: resolve payout", "component", "reconciliation", "layer", "reconciliation", "error", err, "payout_id", p.ID, apperror.LogAttr(err))
 			}
 		}
 		if len(stuckPayouts) > 0 {
-			slog.Info("reconciliation: pass complete", "stuck_payouts_seen", len(stuckPayouts))
+			slog.Info("[reconciliation] runOnce: pass complete", "component", "reconciliation", "stuck_payouts_seen", len(stuckPayouts))
 		}
 	}
 
 	stuckRefunds, err := j.service.ListStuckRefunds(ctx, j.threshold)
 	if err != nil {
-		slog.Error("reconciliation: list stuck refunds", "layer", "reconciliation", "error", err, apperror.LogAttr(err))
+		slog.Error("[reconciliation] runOnce: list stuck refunds", "component", "reconciliation", "layer", "reconciliation", "error", err, apperror.LogAttr(err))
 	} else {
 		for _, ref := range stuckRefunds {
 			if err := j.service.ReconcileRefund(ctx, ref); err != nil {
-				slog.Error("reconciliation: resolve refund", "layer", "reconciliation", "error", err, "refund_id", ref.ID, apperror.LogAttr(err))
+				slog.Error("[reconciliation] runOnce: resolve refund", "component", "reconciliation", "layer", "reconciliation", "error", err, "refund_id", ref.ID, apperror.LogAttr(err))
 			}
 		}
 		if len(stuckRefunds) > 0 {
-			slog.Info("reconciliation: pass complete", "stuck_refunds_seen", len(stuckRefunds))
+			slog.Info("[reconciliation] runOnce: pass complete", "component", "reconciliation", "stuck_refunds_seen", len(stuckRefunds))
 		}
 	}
 
 	if matched, err := j.service.SweepStagedWebhooks(ctx); err != nil {
-		slog.Error("reconciliation: sweep staged webhooks", "layer", "reconciliation", "error", err, apperror.LogAttr(err))
+		slog.Error("[reconciliation] runOnce: sweep staged webhooks", "component", "reconciliation", "layer", "reconciliation", "error", err, apperror.LogAttr(err))
 	} else if matched > 0 {
-		slog.Info("reconciliation: staged webhook sweep matched rows", "count", matched)
+		slog.Info("[reconciliation] runOnce: staged webhook sweep matched rows", "component", "reconciliation", "count", matched)
 	}
 }

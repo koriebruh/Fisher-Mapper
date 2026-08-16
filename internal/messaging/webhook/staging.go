@@ -223,18 +223,18 @@ func Join(
 			// apperror.LogAttr classifies a malformed/undecodable PJP payload
 			// as SourceProvider, not SourceInternal.
 			wrapped := apperror.Wrap(apperror.CodeProviderError, "webhook join: parse staged payload failed", perr)
-			slog.Error("webhook join: parse staged payload failed", "error", perr, "staged_id", e.ID, apperror.LogAttr(wrapped))
+			slog.Error("[webhook] Join: parse staged payload failed", "component", "webhook", "error", perr, "staged_id", e.ID, apperror.LogAttr(wrapped))
 			continue
 		}
 
 		aerr := apply(ctx, providerName, evt)
 		if !benignApplyOutcome(aerr) {
-			slog.Error("webhook join: apply failed, will retry on next join", "error", aerr, "staged_id", e.ID, apperror.LogAttr(aerr))
+			slog.Error("[webhook] Join: apply failed, will retry on next join", "component", "webhook", "error", aerr, "staged_id", e.ID, apperror.LogAttr(aerr))
 			continue
 		}
 
 		if merr := markProcessed(ctx, e.ID); merr != nil {
-			slog.Error("webhook join: mark processed failed", "error", merr, "staged_id", e.ID, apperror.LogAttr(merr))
+			slog.Error("[webhook] Join: mark processed failed", "component", "webhook", "error", merr, "staged_id", e.ID, apperror.LogAttr(merr))
 			continue
 		}
 		resolved++

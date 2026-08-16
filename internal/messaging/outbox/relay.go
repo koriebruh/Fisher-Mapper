@@ -122,14 +122,14 @@ func (r *Relay) Run(ctx context.Context) error {
 
 		claimed, dispatched, failed, err := r.store.DispatchBatch(ctx, r.batchSize, r.dispatchOne)
 		if err != nil {
-			slog.Error("outbox relay: dispatch batch", "error", err)
+			slog.Error("[outbox] Run: dispatch batch", "component", "outbox", "error", err)
 			interval = r.backoff(interval)
 		} else if failed > 0 {
-			slog.Warn("outbox relay: some rows failed to dispatch, will retry", "claimed", claimed, "dispatched", dispatched, "failed", failed)
+			slog.Warn("[outbox] Run: some rows failed to dispatch, will retry", "component", "outbox", "claimed", claimed, "dispatched", dispatched, "failed", failed)
 			interval = r.backoff(interval)
 		} else {
 			if claimed > 0 {
-				slog.Debug("outbox relay: dispatched batch", "claimed", claimed, "dispatched", dispatched)
+				slog.Debug("[outbox] Run: dispatched batch", "component", "outbox", "claimed", claimed, "dispatched", dispatched)
 			}
 			interval = r.baseInterval
 		}
