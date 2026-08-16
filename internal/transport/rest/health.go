@@ -160,7 +160,7 @@ func RegisterHealthRoutes(app *fiber.App, deps Deps) {
 		ctx := c.Context()
 
 		if err := checkPostgres(ctx, deps.Pool); err != nil {
-			slog.Warn("readyz: postgres not ready", "error", err)
+			slog.Warn("[rest] RegisterHealthRoutes: readyz postgres not ready", "component", "rest", "error", err)
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
 				"status": "not ready",
 				"reason": "postgres",
@@ -168,7 +168,7 @@ func RegisterHealthRoutes(app *fiber.App, deps Deps) {
 		}
 
 		if err := checkRedis(deps.QueueClient); err != nil {
-			slog.Warn("readyz: redis not ready", "error", err)
+			slog.Warn("[rest] RegisterHealthRoutes: readyz redis not ready", "component", "rest", "error", err)
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
 				"status": "not ready",
 				"reason": "redis",

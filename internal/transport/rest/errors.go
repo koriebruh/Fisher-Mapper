@@ -57,7 +57,7 @@ func writeError(c *fiber.Ctx, err error) error {
 		// 5xx bodies never carry the raw error text (which may embed a DB
 		// error, a wrapped provider error, etc.) — that detail goes to the
 		// log only.
-		slog.Error("request failed", "error", err, "code", code, apperror.LogAttr(err))
+		slog.Error("[rest] writeError: request failed", "component", "rest", "error", err, "code", code, apperror.LogAttr(err))
 		message = "internal error"
 	}
 
