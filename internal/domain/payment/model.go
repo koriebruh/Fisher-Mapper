@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"Fisher-Mapper/internal/provider/payload"
 )
 
 // OperationType is locked in by plan "Invarian Uang — Decide Now" item 4:
@@ -88,10 +90,31 @@ type Payment struct {
 	OperationType OperationType
 	Provider      string
 	ProviderRef   *string
-	Status        Status
-	LastEventAt   time.Time
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+
+	// PaymentMethod is the caller-requested category ("qris"/
+	// "virtual_account"/"card"/...), forwarded to provider.ChargeRequest and
+	// persisted here so a caller can see back which method a charge actually
+	// used -- it used to flow through to the provider and get silently
+	// dropped on the way back. May be empty ("") for a method-agnostic
+	// charge.
+	PaymentMethod string
+
+	// MethodPayload is the method-specific data the provider returned
+	// alongside the charge (a QRIS string, VA number, card redirect, ...) --
+	// see internal/provider/payload. Nil until ProcessCharge persists the
+	// provider's response (which may happen while still "processing" -- a
+	// QRIS string is typically returned before scan-to-pay completes).
+	MethodPayload *payload.MethodPayload
+
+	// CallbackURL is a caller-supplied best-effort delivery target notified
+	// once this payment reaches a terminal status (see
+	// Service.WithCallbackNotifier) -- nil when the caller didn't set one.
+	CallbackURL *string
+
+	Status      Status
+	LastEventAt time.Time
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 	Envelope
 }
 

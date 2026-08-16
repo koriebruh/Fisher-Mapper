@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"Fisher-Mapper/internal/domain/apperror"
+	"Fisher-Mapper/internal/provider/payload"
 )
 
 // TransitionParams bundles the arguments for Repository.ApplyTransition.
@@ -104,6 +105,14 @@ type Repository interface {
 	// isn't the right tool.
 	SetProviderRef(ctx context.Context, id uuid.UUID, providerRef string) error
 
+	// SetMethodPayload persists the provider's per-method response payload
+	// (QRIS string, VA number, card redirect, ...) without touching status --
+	// called once ProcessCharge's provider.Charge call completes, on success
+	// OR "processing" (a QRIS string is commonly returned while a charge is
+	// still pending scan-to-pay, so this must not be gated on a terminal
+	// outcome).
+	SetMethodPayload(ctx context.Context, id uuid.UUID, mp *payload.MethodPayload) error
+
 	// ApplyTransition performs, in one transaction:
 	//  1. dedup check (if ProviderEventID is set): if an event with the
 	//     same (provider, provider_event_id) was already applied, return
@@ -151,8 +160,9 @@ func NewPGRepository(pool *pgxpool.Pool) *PGRepository {
 }
 
 const paymentInsertColumns = `tenant_id, livemode, currency, amount, operation_type, provider, status,
-		    source_app, channel, trace_id, description, initiated_by, request_ip, request_user_agent`
-const paymentInsertPlaceholders = `$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14`
+		    source_app, channel, trace_id, description, initiated_by, request_ip, request_user_agent,
+		    payment_method, callback_url`
+const paymentInsertPlaceholders = `$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16`
 
 func (r *PGRepository) Create(ctx context.Context, p *Payment) error {
 	insertSQL := `INSERT INTO payments (` + paymentInsertColumns + `)
@@ -162,6 +172,7 @@ func (r *PGRepository) Create(ctx context.Context, p *Payment) error {
 	err := r.pool.QueryRow(ctx, insertSQL,
 		p.TenantID, p.Livemode, p.Currency, p.Amount, p.OperationType, p.Provider, StatusPending,
 		p.SourceApp, p.Channel, p.TraceID, p.Description, p.InitiatedBy, p.RequestIP, p.RequestUserAgent,
+		p.PaymentMethod, p.CallbackURL,
 	).Scan(&p.ID, &p.Status, &p.LastEventAt, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("payment: create: %w", err)
@@ -183,6 +194,7 @@ func (r *PGRepository) CreateWithOutbox(ctx context.Context, p *Payment, withTx 
 	err = tx.QueryRow(ctx, insertSQL,
 		p.TenantID, p.Livemode, p.Currency, p.Amount, p.OperationType, p.Provider, StatusPending,
 		p.SourceApp, p.Channel, p.TraceID, p.Description, p.InitiatedBy, p.RequestIP, p.RequestUserAgent,
+		p.PaymentMethod, p.CallbackURL,
 	).Scan(&p.ID, &p.Status, &p.LastEventAt, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("payment: create with outbox: insert payment: %w", err)
@@ -203,13 +215,15 @@ func (r *PGRepository) CreateWithOutbox(ctx context.Context, p *Payment, withTx 
 // can't drift out of sync between one query's SELECT list and another's.
 const paymentSelectColumns = `id, tenant_id, livemode, currency, amount, operation_type, provider,
 		       provider_ref, status, last_event_at, created_at, updated_at,
-		       source_app, channel, trace_id, description, initiated_by, request_ip, request_user_agent`
+		       source_app, channel, trace_id, description, initiated_by, request_ip, request_user_agent,
+		       payment_method, method_payload, callback_url`
 
 func paymentScanDest(p *Payment) []any {
 	return []any{
 		&p.ID, &p.TenantID, &p.Livemode, &p.Currency, &p.Amount, &p.OperationType, &p.Provider,
 		&p.ProviderRef, &p.Status, &p.LastEventAt, &p.CreatedAt, &p.UpdatedAt,
 		&p.SourceApp, &p.Channel, &p.TraceID, &p.Description, &p.InitiatedBy, &p.RequestIP, &p.RequestUserAgent,
+		&p.PaymentMethod, &p.MethodPayload, &p.CallbackURL,
 	}
 }
 
@@ -319,6 +333,18 @@ func (r *PGRepository) SetProviderRef(ctx context.Context, id uuid.UUID, provide
 	tag, err := r.pool.Exec(ctx, updateSQL, providerRef, id)
 	if err != nil {
 		return fmt.Errorf("payment: set provider ref: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return apperror.New(apperror.CodeNotFound, "payment: not found")
+	}
+	return nil
+}
+
+func (r *PGRepository) SetMethodPayload(ctx context.Context, id uuid.UUID, mp *payload.MethodPayload) error {
+	const updateSQL = `UPDATE payments SET method_payload = $1, updated_at = now() WHERE id = $2`
+	tag, err := r.pool.Exec(ctx, updateSQL, mp, id)
+	if err != nil {
+		return fmt.Errorf("payment: set method payload: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return apperror.New(apperror.CodeNotFound, "payment: not found")

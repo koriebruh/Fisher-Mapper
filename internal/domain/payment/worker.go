@@ -227,6 +227,18 @@ func (s *Service) ProcessCharge(ctx context.Context, in ChargeTaskInput) error {
 		}
 	}
 
+	// Persisted as a SEPARATE call, not folded into TransitionParams above:
+	// a QRIS string is commonly returned while the charge is still
+	// "processing" (target == ""), which is exactly the case a caller needs
+	// this for -- scan-to-pay hasn't happened yet. Gating this on a
+	// terminal outcome would silently drop the one payload value users
+	// actually need most.
+	if chargeResp.MethodPayload != nil {
+		if err := s.repo.SetMethodPayload(ctx, in.PaymentID, chargeResp.MethodPayload); err != nil {
+			return fmt.Errorf("process charge: set method payload: %w", err)
+		}
+	}
+
 	// Webhook staging join (plan item 9): now that this payment's
 	// provider_ref is known, look for any staged event that arrived before
 	// this payment row existed and apply it.

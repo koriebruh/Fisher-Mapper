@@ -282,6 +282,7 @@ func (s *Service) doCreatePayment(ctx context.Context, in CreatePaymentInput, id
 		Amount:        in.Amount,
 		OperationType: OperationCharge,
 		Provider:      in.Provider,
+		PaymentMethod: in.PaymentMethod,
 		Envelope:      in.Envelope,
 	}
 
