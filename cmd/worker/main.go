@@ -44,8 +44,6 @@ import (
 	"Fisher-Mapper/internal/resilience/circuitbreaker"
 )
 
-const serviceName = "fisher-mapper-worker"
-
 // Defaults for the resilience stubs. These are exactly the kind of values
 // the full plan puts in Fase 4's dynamic config (app_config) -- Fase 3
 // hardcodes them here deliberately, since dynamic config does not exist
@@ -109,6 +107,12 @@ func run_() error {
 	if err != nil {
 		return fmt.Errorf("load bootstrap config: %w", err)
 	}
+
+	// serviceName suffixes Bootstrap's shared [service] name rather than
+	// using a second config key -- matches the pre-existing hardcoded
+	// "fisher-mapper-worker" naming exactly, and a suffix can't drift out of
+	// sync with cmd/server's name the way two independent keys could.
+	serviceName := cfg.Service.Name + "-worker"
 
 	// dynSeed's otel_enabled is read straight from config.toml because the
 	// tracer below is created before Postgres connects -- see

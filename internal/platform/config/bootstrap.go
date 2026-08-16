@@ -23,11 +23,36 @@ import (
 
 // Bootstrap is the set of values needed before any connection is formed.
 type Bootstrap struct {
-	Postgres Postgres
-	Redis    Redis
-	HTTP     HTTP
-	GRPC     GRPC
-	Log      Log
+	Postgres  Postgres
+	Redis     Redis
+	HTTP      HTTP
+	GRPC      GRPC
+	Log       Log
+	Service   Service
+	Ratelimit Ratelimit
+}
+
+// Service names this process for the OTel resource attribute and log
+// fields. cmd/worker does not get its own key here -- it derives
+// "<name>-worker" from this one (see cmd/worker/main.go), so the two
+// process names can't drift apart the way two independent config keys
+// could.
+type Service struct {
+	Name string `toml:"name"`
+}
+
+// Ratelimit's RatePerSecond/Burst are bootstrap-only (process tuning, not a
+// feature flag): they are consumed once at startup to construct the
+// resilience/ratelimit.Limiter and never re-read live. This is the SAME
+// [ratelimit] TOML table that also has an `enabled` key, but that key is
+// dynamic-config-seeded (see LoadDynamicSeed/DynamicSeed.RateLimitEnabled in
+// dynamic.go) and lives in app_config after first boot -- overlayFile below
+// only reads rate_per_second/burst from this table and LoadDynamicSeed only
+// reads enabled, so the two loaders coexist on one TOML section without
+// collision.
+type Ratelimit struct {
+	RatePerSecond int `toml:"rate_per_second"`
+	Burst         int `toml:"burst"`
 }
 
 type Postgres struct {
@@ -73,6 +98,13 @@ type fileConfig struct {
 	Log struct {
 		Level *string `toml:"level"`
 	} `toml:"log"`
+	Service struct {
+		Name *string `toml:"name"`
+	} `toml:"service"`
+	Ratelimit struct {
+		RatePerSecond *int `toml:"rate_per_second"`
+		Burst         *int `toml:"burst"`
+	} `toml:"ratelimit"`
 }
 
 // defaultBootstrap must be enough on its own for the server to start against
@@ -93,6 +125,13 @@ func defaultBootstrap() Bootstrap {
 		},
 		Log: Log{
 			Level: "info",
+		},
+		Service: Service{
+			Name: "fisher-mapper",
+		},
+		Ratelimit: Ratelimit{
+			RatePerSecond: 20,
+			Burst:         40,
 		},
 	}
 }
@@ -148,17 +187,29 @@ func overlayFile(cfg *Bootstrap, path string) error {
 	if fc.Log.Level != nil {
 		cfg.Log.Level = *fc.Log.Level
 	}
+	if fc.Service.Name != nil {
+		cfg.Service.Name = *fc.Service.Name
+	}
+	if fc.Ratelimit.RatePerSecond != nil {
+		cfg.Ratelimit.RatePerSecond = *fc.Ratelimit.RatePerSecond
+	}
+	if fc.Ratelimit.Burst != nil {
+		cfg.Ratelimit.Burst = *fc.Ratelimit.Burst
+	}
 	return nil
 }
 
 // Environment variable names. Kept explicit (no reflection-based automatic
 // env binding) so the override set is grep-able and reviewable.
 const (
-	EnvPostgresDSN = "APP_POSTGRES_DSN"
-	EnvRedisAddr   = "APP_REDIS_ADDR"
-	EnvHTTPPort    = "APP_HTTP_PORT"
-	EnvGRPCPort    = "APP_GRPC_PORT"
-	EnvLogLevel    = "APP_LOG_LEVEL"
+	EnvPostgresDSN            = "APP_POSTGRES_DSN"
+	EnvRedisAddr              = "APP_REDIS_ADDR"
+	EnvHTTPPort               = "APP_HTTP_PORT"
+	EnvGRPCPort               = "APP_GRPC_PORT"
+	EnvLogLevel               = "APP_LOG_LEVEL"
+	EnvServiceName            = "APP_SERVICE_NAME"
+	EnvRatelimitRatePerSecond = "APP_RATELIMIT_RATE_PER_SECOND"
+	EnvRatelimitBurst         = "APP_RATELIMIT_BURST"
 )
 
 func overlayEnv(cfg *Bootstrap) error {
@@ -184,6 +235,23 @@ func overlayEnv(cfg *Bootstrap) error {
 	}
 	if v, ok := lookupEnv(EnvLogLevel); ok {
 		cfg.Log.Level = v
+	}
+	if v, ok := lookupEnv(EnvServiceName); ok {
+		cfg.Service.Name = v
+	}
+	if v, ok := lookupEnv(EnvRatelimitRatePerSecond); ok {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("config: env %s must be an integer: %w", EnvRatelimitRatePerSecond, err)
+		}
+		cfg.Ratelimit.RatePerSecond = n
+	}
+	if v, ok := lookupEnv(EnvRatelimitBurst); ok {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("config: env %s must be an integer: %w", EnvRatelimitBurst, err)
+		}
+		cfg.Ratelimit.Burst = n
 	}
 	return nil
 }

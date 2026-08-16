@@ -58,8 +58,6 @@ import (
 // grace period to finish in-flight requests on SIGINT/SIGTERM.
 const grpcShutdownTimeout = 5 * time.Second
 
-const serviceName = "fisher-mapper"
-
 // serverDynamicConfigRefreshInterval governs only THIS process's own Cache
 // (used to serve /admin/config's GET and to best-effort-refresh right after
 // a write) -- it has no bearing on how quickly cmd/worker's enforcement
@@ -93,6 +91,11 @@ func run_() error {
 	if err != nil {
 		return fmt.Errorf("load bootstrap config: %w", err)
 	}
+
+	// serviceName comes from Bootstrap ([service] name in config.toml) --
+	// cmd/worker derives its own by suffixing this same value rather than
+	// needing a second config key that could drift from this one.
+	serviceName := cfg.Service.Name
 
 	// dynSeed carries the otel_enabled seed value only -- read directly from
 	// config.toml because the tracer (step 2 below) is created before
@@ -177,7 +180,10 @@ func run_() error {
 	paymentService := payment.NewService(paymentRepo, idemStore, providers)
 	verifiers := bootstrap.RegisterVerifiers(paymentRepo)
 	webhookStore := webhook.NewStore(pool)
-	limiter := ratelimit.New(20, 40) // stub-cheap default: 20 req/s, burst 40, per client/API key
+	// rate/burst are bootstrap config (internal/platform/config.Ratelimit),
+	// not hardcoded -- only the enabled/disabled toggle is dynamic config
+	// (rateLimitEnabled below).
+	limiter := ratelimit.New(float64(cfg.Ratelimit.RatePerSecond), float64(cfg.Ratelimit.Burst))
 
 	// CRITICAL fix: caller authentication. One shared *tenantauth.Store
 	// instance backs both transports below, same "one shared instance"

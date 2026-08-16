@@ -21,14 +21,23 @@ port = 9090
 [log]
 level = "info"
 
-# Everything below is NOT bootstrap config -- it seeds dynamic config rows in
-# Postgres app_config (see internal/platform/db/migrations/00006_dynamic_config_seeds.sql
-# and 00007_toggle_seeds.sql, which mirror these same literals) and, for
+[service]
+name = "fisher-mapper" # cmd/worker suffixes this ("-worker") rather than needing its own key
+
+# Everything below is process-tuning / feature-flag config, mostly NOT
+# bootstrap: most of it seeds dynamic config rows in Postgres app_config (see
+# internal/platform/db/migrations/00006_dynamic_config_seeds.sql and
+# 00007_toggle_seeds.sql, which mirror these same literals) and, for
 # otel_enabled only, is also read directly by internal/platform/config.LoadDynamicSeed
 # at boot because the OTel tracer must exist before Postgres connects. Once
 # app_config has a row for a key, that row governs -- editing this file after
 # first migration/boot has no runtime effect; change the row instead (PUT
 # /admin/config/:key or psql).
+#
+# EXCEPTION: [ratelimit]'s rate_per_second/burst below are bootstrap-only
+# (process tuning, read once at startup to build the limiter) even though
+# they share a TOML table with the dynamic-seeded `enabled` toggle -- see that
+# section's comment.
 
 [queue]
 # default_name is the one physical asynq queue every task type below
@@ -50,7 +59,9 @@ default_name = "default"
 otel_enabled = true # false disables tracing entirely (e.g. no collector available in this environment)
 
 [ratelimit]
-enabled = true # false disables the token-bucket limiter on REST /payments and the gRPC interceptor (e.g. local dev, load testing)
+enabled = true # false disables the token-bucket limiter on REST /payments and the gRPC interceptor (e.g. local dev, load testing) -- dynamic-config-seeded, see note above
+rate_per_second = 20 # bootstrap-only: token-bucket refill rate, read once at startup
+burst = 40 # bootstrap-only: token-bucket max burst size, read once at startup
 
 [circuitbreaker]
 enabled = true # false bypasses the per-provider breaker so calls reach the provider regardless of trip state (e.g. a sandbox PJP that intentionally simulates failures)
