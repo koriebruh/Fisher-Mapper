@@ -30,6 +30,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/adaptor"
+	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/oklog/run"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -228,6 +229,18 @@ func run_() error {
 	// can flip ratelimit.enabled without a redeploy.
 	rateLimitEnabled := func() bool { return dynamicCache.RateLimitEnabled(dynSeed.RateLimitEnabled) }
 
+	var corsConfig *cors.Config
+	if cfg.CORS.Enabled {
+		corsConfig = &cors.Config{
+			AllowOrigins:     cfg.CORS.AllowOrigins,
+			AllowMethods:     cfg.CORS.AllowMethods,
+			AllowHeaders:     cfg.CORS.AllowHeaders,
+			ExposeHeaders:    cfg.CORS.ExposeHeaders,
+			AllowCredentials: cfg.CORS.AllowCredentials,
+			MaxAge:           cfg.CORS.MaxAgeSeconds,
+		}
+	}
+
 	app := rest.NewApp(rest.Deps{
 		Pool:               pool,
 		QueueClient:        queueClient,
@@ -243,6 +256,7 @@ func run_() error {
 		TenantAuthStore:    tenantAuthStore,
 		Metrics:            metrics,
 		MetricsHandler:     metricsHandler,
+		CORS:               corsConfig,
 	})
 
 	addr := fmt.Sprintf(":%d", cfg.HTTP.Port)

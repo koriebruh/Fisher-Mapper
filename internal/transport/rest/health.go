@@ -8,6 +8,7 @@ import (
 
 	"github.com/gofiber/contrib/otelfiber/v2"
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -62,12 +63,26 @@ type Deps struct {
 	// internal/platform/observability/metrics.go.
 	Metrics        *observability.Metrics
 	MetricsHandler fiber.Handler
+	// CORS is nil-disables (matches every other optional Deps field's
+	// convention): cmd/server builds it from Bootstrap.CORS, passing
+	// nil when CORS.Enabled is false rather than a zero-value Config
+	// (fiber's cors.New(cors.Config{}) still installs an origin-matching
+	// middleware -- "disabled" has to mean "not registered at all").
+	CORS *cors.Config
 }
 
 func NewApp(deps Deps) *fiber.App {
 	app := fiber.New(fiber.Config{
 		DisableStartupMessage: true,
 	})
+
+	// CORS must run before every other middleware: a browser's preflight
+	// OPTIONS request carries no auth/idempotency headers of its own, so it
+	// has to be answered (or rejected) before otelfiber/rate-limit/tenantAuth
+	// ever see it.
+	if deps.CORS != nil {
+		app.Use(cors.New(*deps.CORS))
+	}
 
 	// otelfiber gives every request a span (Fase 5 item 2), using whatever
 	// TracerProvider/Propagator are globally installed at THIS call time --

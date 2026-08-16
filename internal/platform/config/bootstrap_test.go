@@ -62,6 +62,15 @@ metrics_port = "9199"
 shutdown_timeout_seconds = 41
 dynamic_config_refresh_interval_seconds = 42
 metrics_poll_interval_seconds = 43
+
+[cors]
+enabled = false
+allow_origins = "https://distinct.example"
+allow_methods = "GET,POST"
+allow_headers = "X-Distinct-Header"
+expose_headers = "X-Distinct-Expose"
+allow_credentials = true
+max_age_seconds = 99
 `
 
 func TestLoad_TOMLOverlayOverridesDefaults(t *testing.T) {
@@ -131,6 +140,22 @@ func TestLoad_TOMLOverlayOverridesDefaults(t *testing.T) {
 	if cfg.Server == def.Server {
 		t.Error("Server matches defaultBootstrap()'s Server -- file overlay did not run")
 	}
+
+	wantCORS := CORS{
+		Enabled:          false,
+		AllowOrigins:     "https://distinct.example",
+		AllowMethods:     "GET,POST",
+		AllowHeaders:     "X-Distinct-Header",
+		ExposeHeaders:    "X-Distinct-Expose",
+		AllowCredentials: true,
+		MaxAgeSeconds:    99,
+	}
+	if cfg.CORS != wantCORS {
+		t.Errorf("CORS = %+v, want file values %+v", cfg.CORS, wantCORS)
+	}
+	if cfg.CORS == def.CORS {
+		t.Error("CORS matches defaultBootstrap()'s CORS -- file overlay did not run")
+	}
 }
 
 func TestLoad_EnvOverridesTOML(t *testing.T) {
@@ -158,6 +183,13 @@ func TestLoad_EnvOverridesTOML(t *testing.T) {
 	t.Setenv(EnvServerShutdownTimeoutSeconds, "51")
 	t.Setenv(EnvServerDynamicConfigRefreshIntervalSeconds, "52")
 	t.Setenv(EnvServerMetricsPollIntervalSeconds, "53")
+	t.Setenv(EnvCORSEnabled, "true")
+	t.Setenv(EnvCORSAllowOrigins, "https://env.example")
+	t.Setenv(EnvCORSAllowMethods, "GET,DELETE")
+	t.Setenv(EnvCORSAllowHeaders, "X-Env-Header")
+	t.Setenv(EnvCORSExposeHeaders, "X-Env-Expose")
+	t.Setenv(EnvCORSAllowCredentials, "false")
+	t.Setenv(EnvCORSMaxAgeSeconds, "77")
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -210,6 +242,20 @@ func TestLoad_EnvOverridesTOML(t *testing.T) {
 	if cfg.Server != wantServer {
 		t.Errorf("Server = %+v, want env overrides %+v (file had distinct values)", cfg.Server, wantServer)
 	}
+
+	wantCORS := CORS{
+		Enabled:          true,
+		AllowOrigins:     "https://env.example",
+		AllowMethods:     "GET,DELETE",
+		AllowHeaders:     "X-Env-Header",
+		ExposeHeaders:    "X-Env-Expose",
+		AllowCredentials: false,
+		MaxAgeSeconds:    77,
+	}
+	if cfg.CORS != wantCORS {
+		t.Errorf("CORS = %+v, want env overrides %+v (file had distinct values)", cfg.CORS, wantCORS)
+	}
+
 	// Values not overridden by env must still come from the file, proving
 	// env-overlay only touches what it sets rather than resetting the
 	// whole struct.
@@ -262,5 +308,24 @@ func TestLoad_InvalidEnvServerIntReturnsError(t *testing.T) {
 	t.Setenv(EnvServerShutdownTimeoutSeconds, "notanint")
 	if _, err := Load(""); err == nil {
 		t.Fatal("Load() with non-integer APP_SERVER_SHUTDOWN_TIMEOUT_SECONDS should return an error, got nil")
+	}
+}
+
+func TestLoad_InvalidEnvCORSReturnsError(t *testing.T) {
+	t.Setenv(EnvCORSEnabled, "notabool")
+	if _, err := Load(""); err == nil {
+		t.Fatal("Load() with non-bool APP_CORS_ENABLED should return an error, got nil")
+	}
+
+	t.Setenv(EnvCORSEnabled, "")
+	t.Setenv(EnvCORSAllowCredentials, "notabool")
+	if _, err := Load(""); err == nil {
+		t.Fatal("Load() with non-bool APP_CORS_ALLOW_CREDENTIALS should return an error, got nil")
+	}
+
+	t.Setenv(EnvCORSAllowCredentials, "")
+	t.Setenv(EnvCORSMaxAgeSeconds, "notanint")
+	if _, err := Load(""); err == nil {
+		t.Fatal("Load() with non-integer APP_CORS_MAX_AGE_SECONDS should return an error, got nil")
 	}
 }

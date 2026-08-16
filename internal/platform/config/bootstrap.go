@@ -32,6 +32,24 @@ type Bootstrap struct {
 	Ratelimit Ratelimit
 	Worker    Worker
 	Server    Server
+	CORS      CORS
+}
+
+// CORS configures cmd/server's REST CORS middleware. Bootstrap config (not
+// dynamic): which origins/headers a browser is allowed to call this API from
+// is a deployment-time decision, not something that should flip live without
+// a restart. AllowOrigins/AllowMethods/AllowHeaders/ExposeHeaders are
+// comma-separated strings on purpose -- that's the exact shape
+// github.com/gofiber/fiber/v2/middleware/cors.Config's fields already take,
+// so cmd/server passes these straight through with zero parsing.
+type CORS struct {
+	Enabled          bool   `toml:"enabled"`
+	AllowOrigins     string `toml:"allow_origins"`
+	AllowMethods     string `toml:"allow_methods"`
+	AllowHeaders     string `toml:"allow_headers"`
+	ExposeHeaders    string `toml:"expose_headers"`
+	AllowCredentials bool   `toml:"allow_credentials"`
+	MaxAgeSeconds    int    `toml:"max_age_seconds"`
 }
 
 // Server holds cmd/server's own process-tuning knobs -- the fiber-vs-worker
@@ -188,6 +206,15 @@ type fileConfig struct {
 		DynamicConfigRefreshIntervalSeconds *int `toml:"dynamic_config_refresh_interval_seconds"`
 		MetricsPollIntervalSeconds          *int `toml:"metrics_poll_interval_seconds"`
 	} `toml:"server"`
+	CORS struct {
+		Enabled          *bool   `toml:"enabled"`
+		AllowOrigins     *string `toml:"allow_origins"`
+		AllowMethods     *string `toml:"allow_methods"`
+		AllowHeaders     *string `toml:"allow_headers"`
+		ExposeHeaders    *string `toml:"expose_headers"`
+		AllowCredentials *bool   `toml:"allow_credentials"`
+		MaxAgeSeconds    *int    `toml:"max_age_seconds"`
+	} `toml:"cors"`
 }
 
 // defaultBootstrap must be enough on its own for the server to start against
@@ -235,6 +262,15 @@ func defaultBootstrap() Bootstrap {
 			ShutdownTimeoutSeconds:              5,
 			DynamicConfigRefreshIntervalSeconds: 30,
 			MetricsPollIntervalSeconds:          15,
+		},
+		CORS: CORS{
+			Enabled:          true,
+			AllowOrigins:     "*",
+			AllowMethods:     "GET,POST,PUT,PATCH,DELETE,HEAD,OPTIONS",
+			AllowHeaders:     "Origin,Content-Type,Accept,Authorization,X-Api-Key,Idempotency-Key,X-Admin-Key",
+			ExposeHeaders:    "",
+			AllowCredentials: false,
+			MaxAgeSeconds:    300,
 		},
 	}
 }
@@ -347,6 +383,27 @@ func overlayFile(cfg *Bootstrap, path string) error {
 	if fc.Server.MetricsPollIntervalSeconds != nil {
 		cfg.Server.MetricsPollIntervalSeconds = *fc.Server.MetricsPollIntervalSeconds
 	}
+	if fc.CORS.Enabled != nil {
+		cfg.CORS.Enabled = *fc.CORS.Enabled
+	}
+	if fc.CORS.AllowOrigins != nil {
+		cfg.CORS.AllowOrigins = *fc.CORS.AllowOrigins
+	}
+	if fc.CORS.AllowMethods != nil {
+		cfg.CORS.AllowMethods = *fc.CORS.AllowMethods
+	}
+	if fc.CORS.AllowHeaders != nil {
+		cfg.CORS.AllowHeaders = *fc.CORS.AllowHeaders
+	}
+	if fc.CORS.ExposeHeaders != nil {
+		cfg.CORS.ExposeHeaders = *fc.CORS.ExposeHeaders
+	}
+	if fc.CORS.AllowCredentials != nil {
+		cfg.CORS.AllowCredentials = *fc.CORS.AllowCredentials
+	}
+	if fc.CORS.MaxAgeSeconds != nil {
+		cfg.CORS.MaxAgeSeconds = *fc.CORS.MaxAgeSeconds
+	}
 	return nil
 }
 
@@ -382,6 +439,14 @@ const (
 	EnvServerShutdownTimeoutSeconds              = "APP_SERVER_SHUTDOWN_TIMEOUT_SECONDS"
 	EnvServerDynamicConfigRefreshIntervalSeconds = "APP_SERVER_DYNAMIC_CONFIG_REFRESH_INTERVAL_SECONDS"
 	EnvServerMetricsPollIntervalSeconds          = "APP_SERVER_METRICS_POLL_INTERVAL_SECONDS"
+
+	EnvCORSEnabled          = "APP_CORS_ENABLED"
+	EnvCORSAllowOrigins     = "APP_CORS_ALLOW_ORIGINS"
+	EnvCORSAllowMethods     = "APP_CORS_ALLOW_METHODS"
+	EnvCORSAllowHeaders     = "APP_CORS_ALLOW_HEADERS"
+	EnvCORSExposeHeaders    = "APP_CORS_EXPOSE_HEADERS"
+	EnvCORSAllowCredentials = "APP_CORS_ALLOW_CREDENTIALS"
+	EnvCORSMaxAgeSeconds    = "APP_CORS_MAX_AGE_SECONDS"
 )
 
 func overlayEnv(cfg *Bootstrap) error {
@@ -430,6 +495,50 @@ func overlayEnv(cfg *Bootstrap) error {
 	}
 	if err := overlayServerEnv(cfg); err != nil {
 		return err
+	}
+	if err := overlayCORSEnv(cfg); err != nil {
+		return err
+	}
+	return nil
+}
+
+// overlayCORSEnv is split out of overlayEnv for the same reason
+// overlayWorkerEnv/overlayServerEnv are: keeps overlayEnv's line count from
+// ballooning. CORS mixes string/bool/int fields (unlike Worker/Server's
+// all-int tables), so it stays a flat function rather than a table loop.
+func overlayCORSEnv(cfg *Bootstrap) error {
+	if v, ok := lookupEnv(EnvCORSEnabled); ok {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("config: env %s must be a bool: %w", EnvCORSEnabled, err)
+		}
+		cfg.CORS.Enabled = b
+	}
+	if v, ok := lookupEnv(EnvCORSAllowOrigins); ok {
+		cfg.CORS.AllowOrigins = v
+	}
+	if v, ok := lookupEnv(EnvCORSAllowMethods); ok {
+		cfg.CORS.AllowMethods = v
+	}
+	if v, ok := lookupEnv(EnvCORSAllowHeaders); ok {
+		cfg.CORS.AllowHeaders = v
+	}
+	if v, ok := lookupEnv(EnvCORSExposeHeaders); ok {
+		cfg.CORS.ExposeHeaders = v
+	}
+	if v, ok := lookupEnv(EnvCORSAllowCredentials); ok {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("config: env %s must be a bool: %w", EnvCORSAllowCredentials, err)
+		}
+		cfg.CORS.AllowCredentials = b
+	}
+	if v, ok := lookupEnv(EnvCORSMaxAgeSeconds); ok {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return fmt.Errorf("config: env %s must be an integer: %w", EnvCORSMaxAgeSeconds, err)
+		}
+		cfg.CORS.MaxAgeSeconds = n
 	}
 	return nil
 }

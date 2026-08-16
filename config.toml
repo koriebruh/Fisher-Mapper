@@ -57,6 +57,20 @@ reconciliation_stuck_threshold_seconds = 60 # how long a payment must sit in "pr
 metrics_poll_interval_seconds = 15 # DB-pool-stats + terminal_failures-depth poller interval
 metrics_port = "9101" # this process's own GET /metrics port (separate from cmd/server's, since both normally run on the same host)
 
+# cmd/server's REST CORS middleware -- bootstrap config, not a feature flag
+# (which origins a browser may call this API from is a deployment-time
+# decision). AllowOrigins/AllowMethods/AllowHeaders/ExposeHeaders are
+# comma-separated strings passed straight through to fiber's cors.Config,
+# zero parsing needed. cmd/worker never reads this section.
+[cors]
+enabled = true # false disables the middleware entirely (not just permissive) -- e.g. a server-to-server-only deployment with no browser client
+allow_origins = "*" # lock this to your real frontend origin(s) before production -- "*" is local-dev-only
+allow_methods = "GET,POST,PUT,PATCH,DELETE,HEAD,OPTIONS"
+allow_headers = "Origin,Content-Type,Accept,Authorization,X-Api-Key,Idempotency-Key,X-Admin-Key" # X-Api-Key is tenant auth, X-Admin-Key is /admin/config auth, Idempotency-Key is the REST create-payment/refund/payout header
+expose_headers = ""
+allow_credentials = false # must stay false while allow_origins is "*" -- browsers (and fiber's cors middleware) refuse that combination
+max_age_seconds = 300 # how long a browser may cache a preflight OPTIONS response
+
 # Everything below is process-tuning / feature-flag config, mostly NOT
 # bootstrap: most of it seeds dynamic config rows in Postgres app_config (see
 # internal/platform/db/migrations/00006_dynamic_config_seeds.sql and
