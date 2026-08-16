@@ -7,7 +7,7 @@
 -- unlike 00004's seed: by Fase 4 this table may already have operator-set
 -- rows from a prior deploy, and a migration must never clobber those.
 INSERT INTO app_config (key, value, updated_by)
-VALUES ('queue.default_name', 'default', 'migration_seed')
+VALUES ('queue.default_name', 'payments', 'migration_seed')
 ON CONFLICT (key) DO NOTHING;
 
 INSERT INTO app_config (key, value, updated_by)

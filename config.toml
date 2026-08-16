@@ -90,7 +90,7 @@ max_age_seconds = 300 # how long a browser may cache a preflight OPTIONS respons
 # default_name is the one physical asynq queue every task type below
 # dispatches into today (per-task-type routing is a documented, not-yet-built
 # option -- see internal/messaging/outbox/relay.go's providerCarryingTaskTypes).
-default_name = "default"
+default_name = "payments"
 # Task types this app produces (internal/platform/queue.TaskTypeCharge /
 # TaskTypeRefund) -- NOT configurable here on purpose: a task type is
 # persisted verbatim in the outbox table, so renaming it in config.toml would

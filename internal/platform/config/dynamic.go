@@ -142,7 +142,7 @@ const (
 	RateLimitEnabledKey      = "ratelimit.enabled"
 	CircuitBreakerEnabledKey = "circuitbreaker.enabled"
 	ReconciliationEnabledKey = "reconciliation.enabled"
-	DefaultQueueName         = "default"
+	DefaultQueueName         = "payments"
 	DefaultObservabilityOn   = true
 	DefaultRateLimitEnabled  = true
 	DefaultCircuitBreakerOn  = true
