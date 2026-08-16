@@ -93,7 +93,7 @@ func (s *Service) CreatePayout(ctx context.Context, in CreatePayoutInput, idempo
 		return CreatePayoutOutput{}, err
 	}
 	if in.CallbackURL != nil {
-		if err := ValidateCallbackURL(*in.CallbackURL); err != nil {
+		if err := ValidateCallbackURL(ctx, *in.CallbackURL); err != nil {
 			return CreatePayoutOutput{}, err
 		}
 	}
@@ -315,6 +315,10 @@ func (s *Service) ProcessPayout(ctx context.Context, in PayoutTaskInput) error {
 		}); err != nil {
 			return fmt.Errorf("process payout: apply result: %w", err)
 		}
+
+		// Fired synchronously, detached context -- mirrors ProcessCharge's
+		// identical call/comment exactly.
+		s.notifyCallback(context.Background(), in.CallbackURL, in.PayoutID.String(), target, in.Amount, in.Currency, payoutResp.ProviderRef)
 	} else if payoutResp.ProviderRef != "" {
 		if err := pr.SetPayoutProviderRef(ctx, in.PayoutID, payoutResp.ProviderRef); err != nil {
 			return fmt.Errorf("process payout: set provider ref: %w", err)

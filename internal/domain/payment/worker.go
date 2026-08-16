@@ -226,6 +226,15 @@ func (s *Service) ProcessCharge(ctx context.Context, in ChargeTaskInput) error {
 		}); err != nil {
 			return fmt.Errorf("process charge: apply result: %w", err)
 		}
+
+		// Fired synchronously (never a bare goroutine -- the plan forbids
+		// "go func() liar tanpa owner"), with a context detached from ctx's
+		// own cancellation: a worker shutdown signal must not cut off a
+		// callback POST that's already in flight. The 5s cap comes from the
+		// concrete notifier's own http.Client timeout, not from this
+		// context, so context.Background() here is deliberate, not an
+		// oversight.
+		s.notifyCallback(context.Background(), in.CallbackURL, in.PaymentID.String(), target, in.Amount, in.Currency, chargeResp.ProviderRef)
 	} else if chargeResp.ProviderRef != "" {
 		if err := s.repo.SetProviderRef(ctx, in.PaymentID, chargeResp.ProviderRef); err != nil {
 			return fmt.Errorf("process charge: set provider ref: %w", err)

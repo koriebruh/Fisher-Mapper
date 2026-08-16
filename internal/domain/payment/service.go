@@ -130,6 +130,15 @@ type Service struct {
 	// wired" (e.g. cmd/server's HTTP-only Service, which never reconciles
 	// anything).
 	onReconciliationMismatch func(ctx context.Context)
+
+	// callbackNotifier is the Step 6 best-effort delivery hook, injected the
+	// same plain-func way as providerEnabled/onReconciliationMismatch so
+	// this package never imports net/http directly for it -- see
+	// CallbackNotifier's doc (callback_notify.go) for the delivery contract
+	// (fire-and-forget, must never block/panic/propagate an error). nil
+	// means "no callback delivery wired" (e.g. cmd/server's HTTP-only
+	// Service, and any test that doesn't care about this path).
+	callbackNotifier CallbackNotifier
 }
 
 func NewService(repo Repository, idem idempotency.Store, providers providerRegistry) *Service {
@@ -192,6 +201,14 @@ func (s *Service) WithReconciliationMismatchHook(fn func(ctx context.Context)) *
 	return s
 }
 
+// WithCallbackNotifier wires the Step 6 best-effort callback delivery hook
+// -- see CallbackNotifier's doc (callback_notify.go). Returns s for
+// chaining.
+func (s *Service) WithCallbackNotifier(fn CallbackNotifier) *Service {
+	s.callbackNotifier = fn
+	return s
+}
+
 // isProviderEnabled reports whether providerName is enabled, treating a
 // nil providerEnabled (not wired -- e.g. cmd/server's HTTP-only Service) as
 // always-enabled.
@@ -240,7 +257,7 @@ func (s *Service) CreatePayment(ctx context.Context, in CreatePaymentInput, idem
 		return CreatePaymentOutput{}, err
 	}
 	if in.CallbackURL != nil {
-		if err := ValidateCallbackURL(*in.CallbackURL); err != nil {
+		if err := ValidateCallbackURL(ctx, *in.CallbackURL); err != nil {
 			return CreatePaymentOutput{}, err
 		}
 	}

@@ -13,6 +13,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -42,6 +43,7 @@ import (
 	"Fisher-Mapper/internal/platform/queue"
 	"Fisher-Mapper/internal/resilience/bulkhead"
 	"Fisher-Mapper/internal/resilience/circuitbreaker"
+	"Fisher-Mapper/internal/resilience/ssrf"
 )
 
 // All resilience/queue/reconciliation/metrics tuning below is read from
@@ -173,7 +175,8 @@ func run_() error {
 		WithCircuitBreakers(breakers).
 		WithBulkhead(bulkheadLimiter).
 		WithProviderEnabledCheck(dynamicCache.ProviderEnabled).
-		WithCircuitBreakerEnabledCheck(func() bool { return dynamicCache.CircuitBreakerEnabled(dynSeed.CircuitBreakerEnabled) })
+		WithCircuitBreakerEnabledCheck(func() bool { return dynamicCache.CircuitBreakerEnabled(dynSeed.CircuitBreakerEnabled) }).
+		WithCallbackNotifier(httpCallbackNotifier)
 	if metrics != nil {
 		// Fase 5 reconciliation-mismatch counter -- see
 		// internal/domain/payment/reconcile.go's onReconciliationMismatch call site.
@@ -341,4 +344,59 @@ func configPath() string {
 		return v
 	}
 	return "config.toml"
+}
+
+// callbackHTTPClient is shared across every delivery attempt. Its Timeout
+// IS the 5s bound the task doc requires, not something the caller context
+// needs to enforce (see payment.CallbackNotifier's doc on why ProcessCharge/
+// ProcessPayout pass a detached context.Background() here).
+//
+// SSRF: callback_url is entirely caller-supplied, so this client's
+// Transport dials through ssrf.SafeDialer -- its Control hook rejects the
+// connection at the point Go is about to connect(2) to the ACTUAL resolved
+// address, which is what makes it safe against DNS rebinding (a pre-flight
+// lookup, checked once and then discarded, would not be). CheckRedirect
+// refuses every redirect for the identical reason: a validated-safe public
+// URL could otherwise 302 to an internal address and the redirect would be
+// followed with no re-check.
+var callbackHTTPClient = &http.Client{
+	Timeout: 5 * time.Second,
+	Transport: &http.Transport{
+		DialContext: ssrf.SafeDialer(5 * time.Second).DialContext,
+	},
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
+// httpCallbackNotifier is the concrete payment.CallbackNotifier this
+// process wires in: a single best-effort POST, no retry/backoff/signing
+// (explicitly deferred -- Name-and-Skip tier, see the task's step 6 scope).
+// A delivery failure (network error, non-2xx) is logged and otherwise
+// swallowed -- it must never fail the ProcessCharge/ProcessPayout task that
+// triggered it or cause a queue retry.
+func httpCallbackNotifier(ctx context.Context, url string, payload payment.CallbackPayload) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		slog.Error("callback notifier: marshal payload", "url", url, "error", err)
+		return
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		slog.Error("callback notifier: build request", "url", url, "error", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := callbackHTTPClient.Do(req)
+	if err != nil {
+		slog.Warn("callback notifier: delivery failed", "url", url, "error", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		slog.Warn("callback notifier: non-2xx response", "url", url, "status", resp.StatusCode)
+	}
 }
