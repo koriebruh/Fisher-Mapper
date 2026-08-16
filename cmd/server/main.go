@@ -53,22 +53,11 @@ import (
 	"Fisher-Mapper/internal/transport/rest"
 )
 
-// grpcShutdownTimeout matches the fiber actor's own shutdown timeout below
-// (lifecycle.FiberActor's 5*time.Second) -- both transports get the same
-// grace period to finish in-flight requests on SIGINT/SIGTERM.
-const grpcShutdownTimeout = 5 * time.Second
-
-// serverDynamicConfigRefreshInterval governs only THIS process's own Cache
-// (used to serve /admin/config's GET and to best-effort-refresh right after
-// a write) -- it has no bearing on how quickly cmd/worker's enforcement
-// points observe a change; that is bounded by the worker's own Cache.Run
-// interval, since they are different processes sharing only the DB.
-const serverDynamicConfigRefreshInterval = 30 * time.Second
-
-// metricsPollInterval governs the Fase 5 DB-pool-stats poller actor (this
-// process's own pgxpool.Pool -- it never writes terminal_failures, so unlike
-// cmd/worker it has nothing to poll there).
-const metricsPollInterval = 15 * time.Second
+// cfg.Server (internal/platform/config.Server, config.toml [server]) holds
+// this process's tuning: ShutdownTimeoutSeconds feeds BOTH the fiber actor
+// and the gRPC actor below (one value, not two independently hardcoded
+// literals that a comment merely asserted matched), plus this process's own
+// dynamic-config refresh interval and metrics poll interval.
 
 func main() {
 	if err := run_(); err != nil {
@@ -199,7 +188,7 @@ func run_() error {
 	// the admin GET/PUT endpoints simply hit Postgres directly on demand
 	// (DynamicStore.GetAll/SetWithAudit don't depend on the cache at all).
 	dynamicStore := config.NewDynamicStore(pool)
-	dynamicCache := config.NewCache(dynamicStore, serverDynamicConfigRefreshInterval)
+	dynamicCache := config.NewCache(dynamicStore, time.Duration(cfg.Server.DynamicConfigRefreshIntervalSeconds)*time.Second)
 	if err := dynamicCache.Load(ctx); err != nil {
 		logger.Warn("initial dynamic config load failed, /admin/config still works (reads Postgres directly)", "error", err)
 	} else {
@@ -300,29 +289,32 @@ func run_() error {
 
 	g.Add(run.SignalHandler(ctx, syscall.SIGINT, syscall.SIGTERM))
 
-	fiberExecute, fiberInterrupt := lifecycle.FiberActor(app, addr, 5*time.Second)
+	shutdownTimeout := time.Duration(cfg.Server.ShutdownTimeoutSeconds) * time.Second
+
+	fiberExecute, fiberInterrupt := lifecycle.FiberActor(app, addr, shutdownTimeout)
 	g.Add(fiberExecute, fiberInterrupt)
 
-	grpcExecute, grpcInterrupt := lifecycle.GRPCServerActor(grpcServer, grpcListener, grpcShutdownTimeout)
+	grpcExecute, grpcInterrupt := lifecycle.GRPCServerActor(grpcServer, grpcListener, shutdownTimeout)
 	g.Add(grpcExecute, grpcInterrupt)
 
-	// Fase 4 dynamic config watcher: without this actor, serverDynamicConfigRefreshInterval
-	// drives no ticker at all -- this process's Cache would only ever update
-	// via the admin PUT handler's best-effort post-write Refresh. The plan
-	// lists "dynamic-config watcher" as an oklog/run actor unconditionally
-	// (every long-running process that owns a Cache runs it), so this
-	// process gets the same periodic background refresh cmd/worker does,
-	// even though today nothing in cmd/server reads the cache on the hot
-	// path (a future admin-surface read of the cache, or another
-	// cache-backed feature added to this process, gets it for free).
+	// Fase 4 dynamic config watcher: without this actor, cfg.Server's
+	// dynamic-config-refresh interval drives no ticker at all -- this
+	// process's Cache would only ever update via the admin PUT handler's
+	// best-effort post-write Refresh. The plan lists "dynamic-config
+	// watcher" as an oklog/run actor unconditionally (every long-running
+	// process that owns a Cache runs it), so this process gets the same
+	// periodic background refresh cmd/worker does, even though today
+	// nothing in cmd/server reads the cache on the hot path (a future
+	// admin-surface read of the cache, or another cache-backed feature added
+	// to this process, gets it for free).
 	dynConfigExecute, dynConfigInterrupt := lifecycle.RunnerActor(dynamicCache.Run)
 	g.Add(dynConfigExecute, dynConfigInterrupt)
 
 	// Fase 5 metrics poller: this process's own DB pool stats only (see
-	// metricsPollInterval doc) -- no-op if metrics is nil (meter provider
-	// failed to build above).
+	// cfg.Server.MetricsPollIntervalSeconds' doc) -- no-op if metrics is nil
+	// (meter provider failed to build above).
 	if metrics != nil {
-		poller := observability.NewPoller(pool, nil, metrics, metricsPollInterval)
+		poller := observability.NewPoller(pool, nil, metrics, time.Duration(cfg.Server.MetricsPollIntervalSeconds)*time.Second)
 		pollerExecute, pollerInterrupt := lifecycle.RunnerActor(poller.Run)
 		g.Add(pollerExecute, pollerInterrupt)
 	}

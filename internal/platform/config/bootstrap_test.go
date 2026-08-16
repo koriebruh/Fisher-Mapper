@@ -57,6 +57,11 @@ reconciliation_poll_interval_seconds = 16
 reconciliation_stuck_threshold_seconds = 61
 metrics_poll_interval_seconds = 16
 metrics_port = "9199"
+
+[server]
+shutdown_timeout_seconds = 41
+dynamic_config_refresh_interval_seconds = 42
+metrics_poll_interval_seconds = 43
 `
 
 func TestLoad_TOMLOverlayOverridesDefaults(t *testing.T) {
@@ -114,6 +119,18 @@ func TestLoad_TOMLOverlayOverridesDefaults(t *testing.T) {
 	if cfg.Worker == def.Worker {
 		t.Error("Worker matches defaultBootstrap()'s Worker -- file overlay did not run")
 	}
+
+	wantServer := Server{
+		ShutdownTimeoutSeconds:              41,
+		DynamicConfigRefreshIntervalSeconds: 42,
+		MetricsPollIntervalSeconds:          43,
+	}
+	if cfg.Server != wantServer {
+		t.Errorf("Server = %+v, want file values %+v", cfg.Server, wantServer)
+	}
+	if cfg.Server == def.Server {
+		t.Error("Server matches defaultBootstrap()'s Server -- file overlay did not run")
+	}
 }
 
 func TestLoad_EnvOverridesTOML(t *testing.T) {
@@ -138,6 +155,9 @@ func TestLoad_EnvOverridesTOML(t *testing.T) {
 	t.Setenv(EnvWorkerReconciliationStuckThresholdSeconds, "111")
 	t.Setenv(EnvWorkerMetricsPollIntervalSeconds, "112")
 	t.Setenv(EnvWorkerMetricsPort, "9200")
+	t.Setenv(EnvServerShutdownTimeoutSeconds, "51")
+	t.Setenv(EnvServerDynamicConfigRefreshIntervalSeconds, "52")
+	t.Setenv(EnvServerMetricsPollIntervalSeconds, "53")
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -180,6 +200,15 @@ func TestLoad_EnvOverridesTOML(t *testing.T) {
 	}
 	if cfg.Worker != wantWorker {
 		t.Errorf("Worker = %+v, want env overrides %+v (file had distinct values)", cfg.Worker, wantWorker)
+	}
+
+	wantServer := Server{
+		ShutdownTimeoutSeconds:              51,
+		DynamicConfigRefreshIntervalSeconds: 52,
+		MetricsPollIntervalSeconds:          53,
+	}
+	if cfg.Server != wantServer {
+		t.Errorf("Server = %+v, want env overrides %+v (file had distinct values)", cfg.Server, wantServer)
 	}
 	// Values not overridden by env must still come from the file, proving
 	// env-overlay only touches what it sets rather than resetting the
@@ -226,5 +255,12 @@ func TestLoad_InvalidEnvWorkerIntReturnsError(t *testing.T) {
 	t.Setenv(EnvWorkerAsynqConcurrency, "notanint")
 	if _, err := Load(""); err == nil {
 		t.Fatal("Load() with non-integer APP_WORKER_ASYNQ_CONCURRENCY should return an error, got nil")
+	}
+}
+
+func TestLoad_InvalidEnvServerIntReturnsError(t *testing.T) {
+	t.Setenv(EnvServerShutdownTimeoutSeconds, "notanint")
+	if _, err := Load(""); err == nil {
+		t.Fatal("Load() with non-integer APP_SERVER_SHUTDOWN_TIMEOUT_SECONDS should return an error, got nil")
 	}
 }

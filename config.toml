@@ -26,6 +26,14 @@ level = "info"
 [service]
 name = "fisher-mapper" # cmd/worker suffixes this ("-worker") rather than needing its own key
 
+# cmd/server's own process tuning -- parallel to [worker] below, same
+# "bootstrap config, not a feature flag" reasoning. cmd/worker never reads
+# this section.
+[server]
+shutdown_timeout_seconds = 5 # grace period for BOTH the fiber actor and the gRPC actor to finish in-flight requests on SIGINT/SIGTERM
+dynamic_config_refresh_interval_seconds = 30 # how often this process refreshes its own app_config cache (used by /admin/config's GET)
+metrics_poll_interval_seconds = 15 # this process's own DB-pool-stats poller interval
+
 # cmd/worker's own process tuning -- bootstrap config (read once at startup
 # to size resilience primitives/the asynq server/pollers), not app_config:
 # none of this is a feature flag meant to flip live. cmd/server never reads

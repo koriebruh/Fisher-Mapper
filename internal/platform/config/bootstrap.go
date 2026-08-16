@@ -31,6 +31,20 @@ type Bootstrap struct {
 	Service   Service
 	Ratelimit Ratelimit
 	Worker    Worker
+	Server    Server
+}
+
+// Server holds cmd/server's own process-tuning knobs -- the fiber-vs-worker
+// counterpart of Worker above, same "bootstrap config, not a feature flag"
+// reasoning. ShutdownTimeoutSeconds feeds BOTH the fiber actor and the gRPC
+// actor (see cmd/server/main.go) -- they used to be two independently
+// hardcoded 5*time.Second literals with a comment merely asserting they
+// matched; a single field makes that actually guaranteed rather than
+// coincidental.
+type Server struct {
+	ShutdownTimeoutSeconds              int `toml:"shutdown_timeout_seconds"`
+	DynamicConfigRefreshIntervalSeconds int `toml:"dynamic_config_refresh_interval_seconds"`
+	MetricsPollIntervalSeconds          int `toml:"metrics_poll_interval_seconds"`
 }
 
 // Worker holds cmd/worker's own process-tuning knobs -- all of it is
@@ -169,6 +183,11 @@ type fileConfig struct {
 		MetricsPollIntervalSeconds          *int    `toml:"metrics_poll_interval_seconds"`
 		MetricsPort                         *string `toml:"metrics_port"`
 	} `toml:"worker"`
+	Server struct {
+		ShutdownTimeoutSeconds              *int `toml:"shutdown_timeout_seconds"`
+		DynamicConfigRefreshIntervalSeconds *int `toml:"dynamic_config_refresh_interval_seconds"`
+		MetricsPollIntervalSeconds          *int `toml:"metrics_poll_interval_seconds"`
+	} `toml:"server"`
 }
 
 // defaultBootstrap must be enough on its own for the server to start against
@@ -211,6 +230,11 @@ func defaultBootstrap() Bootstrap {
 			ReconciliationStuckThresholdSeconds: 60,
 			MetricsPollIntervalSeconds:          15,
 			MetricsPort:                         "9101",
+		},
+		Server: Server{
+			ShutdownTimeoutSeconds:              5,
+			DynamicConfigRefreshIntervalSeconds: 30,
+			MetricsPollIntervalSeconds:          15,
 		},
 	}
 }
@@ -314,6 +338,15 @@ func overlayFile(cfg *Bootstrap, path string) error {
 	if fc.Worker.MetricsPort != nil {
 		cfg.Worker.MetricsPort = *fc.Worker.MetricsPort
 	}
+	if fc.Server.ShutdownTimeoutSeconds != nil {
+		cfg.Server.ShutdownTimeoutSeconds = *fc.Server.ShutdownTimeoutSeconds
+	}
+	if fc.Server.DynamicConfigRefreshIntervalSeconds != nil {
+		cfg.Server.DynamicConfigRefreshIntervalSeconds = *fc.Server.DynamicConfigRefreshIntervalSeconds
+	}
+	if fc.Server.MetricsPollIntervalSeconds != nil {
+		cfg.Server.MetricsPollIntervalSeconds = *fc.Server.MetricsPollIntervalSeconds
+	}
 	return nil
 }
 
@@ -345,6 +378,10 @@ const (
 	// code used (os.Getenv("APP_WORKER_METRICS_PORT")) so existing
 	// deployments/.env files that already set it keep working unchanged.
 	EnvWorkerMetricsPort = "APP_WORKER_METRICS_PORT"
+
+	EnvServerShutdownTimeoutSeconds              = "APP_SERVER_SHUTDOWN_TIMEOUT_SECONDS"
+	EnvServerDynamicConfigRefreshIntervalSeconds = "APP_SERVER_DYNAMIC_CONFIG_REFRESH_INTERVAL_SECONDS"
+	EnvServerMetricsPollIntervalSeconds          = "APP_SERVER_METRICS_POLL_INTERVAL_SECONDS"
 )
 
 func overlayEnv(cfg *Bootstrap) error {
@@ -391,6 +428,9 @@ func overlayEnv(cfg *Bootstrap) error {
 	if err := overlayWorkerEnv(cfg); err != nil {
 		return err
 	}
+	if err := overlayServerEnv(cfg); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -426,6 +466,27 @@ func overlayWorkerEnv(cfg *Bootstrap) error {
 	}
 	if v, ok := lookupEnv(EnvWorkerMetricsPort); ok {
 		cfg.Worker.MetricsPort = v
+	}
+	return nil
+}
+
+func overlayServerEnv(cfg *Bootstrap) error {
+	intEnvs := []struct {
+		name string
+		dst  *int
+	}{
+		{EnvServerShutdownTimeoutSeconds, &cfg.Server.ShutdownTimeoutSeconds},
+		{EnvServerDynamicConfigRefreshIntervalSeconds, &cfg.Server.DynamicConfigRefreshIntervalSeconds},
+		{EnvServerMetricsPollIntervalSeconds, &cfg.Server.MetricsPollIntervalSeconds},
+	}
+	for _, e := range intEnvs {
+		if v, ok := lookupEnv(e.name); ok {
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return fmt.Errorf("config: env %s must be an integer: %w", e.name, err)
+			}
+			*e.dst = n
+		}
 	}
 	return nil
 }
