@@ -66,6 +66,10 @@ message CreatePaymentRequest {
   // distinction has no meaning either field needs to make).
   string source_app = 9;
   string description = 10;
+  // callback_url is optional -- see payment.CreatePaymentInput.CallbackURL's
+  // doc. Empty string is "not set", validated (rejected before persistence)
+  // when non-empty and not a valid http(s) URL.
+  string callback_url = 11;
 }
 
 message CreatePaymentResponse {
@@ -105,6 +109,54 @@ message GetPaymentResponse {
   string initiated_by = 14;
   string request_ip = 15;
   string request_user_agent = 16;
+  // payment_method/method_payload/callback_url mirror REST's paymentView --
+  // see internal/domain/payment.Payment's doc for each field. Empty
+  // string / absent nested message is proto3's natural "not set"; a gRPC
+  // client distinguishes "no method_payload" from "empty MethodPayload" via
+  // the generated GetMethodPayload() nil-check, same shape as REST's JSON
+  // null.
+  string payment_method = 17;
+  MethodPayload method_payload = 18;
+  string callback_url = 19;
+}
+
+// MethodPayload mirrors internal/provider/payload.MethodPayload: only the
+// nested message matching method is set, the rest left absent (proto3's
+// analogue of REST's "rest are nil -> JSON null").
+message MethodPayload {
+  string method = 1;
+  QRIS qris = 2;
+  VirtualAccount virtual_account = 3;
+  Card card = 4;
+  EWallet ewallet = 5;
+}
+
+// QRIS mirrors internal/provider/payload.QRIS. expires_at is RFC3339,
+// empty string = absent (a plain string, not google.protobuf.Timestamp, to
+// avoid a WKT import/timestamppb conversion for a template this small).
+message QRIS {
+  string qr_string = 1;
+  string expires_at = 2;
+}
+
+// VirtualAccount mirrors internal/provider/payload.VirtualAccount.
+message VirtualAccount {
+  string bank_code = 1;
+  string va_number = 2;
+  string expires_at = 3;
+}
+
+// Card mirrors internal/provider/payload.Card. masked_pan is display-only
+// (e.g. "411111******1111") — see provider.go's PCI-DSS scope note.
+message Card {
+  string masked_pan = 1;
+  string redirect_url = 2;
+}
+
+// EWallet mirrors internal/provider/payload.EWallet.
+message EWallet {
+  string redirect_url = 1;
+  string expires_at = 2;
 }
 
 // CreateRefundRequest deliberately has no tenant_id/livemode field — same as
@@ -174,6 +226,9 @@ message CreatePayoutRequest {
   // payment.Envelope's doc.
   string source_app = 9;
   string description = 10;
+  // callback_url mirrors CreatePaymentRequest's field — see
+  // payment.CreatePayoutInput.CallbackURL's doc.
+  string callback_url = 11;
 }
 
 message CreatePayoutResponse {
@@ -207,4 +262,7 @@ message GetPayoutResponse {
   string initiated_by = 15;
   string request_ip = 16;
   string request_user_agent = 17;
+  // callback_url mirrors REST's payoutView. A payout has no
+  // payment_method/method_payload analogue -- see payoutView's doc.
+  string callback_url = 18;
 }

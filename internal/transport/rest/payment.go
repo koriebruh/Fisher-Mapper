@@ -8,6 +8,7 @@ import (
 
 	"Fisher-Mapper/internal/domain/apperror"
 	"Fisher-Mapper/internal/domain/payment"
+	"Fisher-Mapper/internal/provider/payload"
 )
 
 // PaymentDeps are the dependencies the payment route group needs. Kept
@@ -36,6 +37,10 @@ type createPaymentRequest struct {
 	// see payment.Envelope's doc. Both optional.
 	SourceApp   *string `json:"source_app,omitempty"`
 	Description *string `json:"description,omitempty"`
+
+	// CallbackURL is optional -- see payment.CreatePaymentInput.CallbackURL's
+	// doc. Validated (ValidateCallbackURL) before persistence.
+	CallbackURL *string `json:"callback_url,omitempty"`
 }
 
 // RegisterPaymentRoutes registers the payment endpoints on router (either
@@ -77,6 +82,7 @@ func handleCreatePayment(deps PaymentDeps) fiber.Handler {
 			Provider:      req.Provider,
 			PaymentMethod: req.PaymentMethod,
 			Metadata:      req.Metadata,
+			CallbackURL:   req.CallbackURL,
 			Envelope:      buildEnvelope(c, req.SourceApp, req.Description),
 		}
 
@@ -110,6 +116,15 @@ type paymentView struct {
 	Status      string    `json:"status"`
 	ProviderRef string    `json:"provider_ref,omitempty"`
 
+	// PaymentMethod/MethodPayload/CallbackURL: no omitempty, deliberately --
+	// an absent value must serialize as JSON null (the user's explicit
+	// requirement), not disappear from the response body. PaymentMethod
+	// stays a plain string (empty string, not null, is its natural "unset"
+	// per Payment.PaymentMethod's doc).
+	PaymentMethod string                 `json:"payment_method"`
+	MethodPayload *payload.MethodPayload `json:"method_payload"`
+	CallbackURL   *string                `json:"callback_url"`
+
 	// Envelope fields, exposed verbatim -- see payment.Envelope's doc for
 	// what each one means.
 	SourceApp        string `json:"source_app,omitempty"`
@@ -127,10 +142,13 @@ type paymentView struct {
 // endpoint.
 func newPaymentView(p *payment.Payment) paymentView {
 	view := paymentView{
-		PaymentID:   p.ID,
-		Status:      string(p.Status),
-		Channel:     p.Channel,
-		InitiatedBy: p.InitiatedBy,
+		PaymentID:     p.ID,
+		Status:        string(p.Status),
+		Channel:       p.Channel,
+		InitiatedBy:   p.InitiatedBy,
+		PaymentMethod: p.PaymentMethod,
+		MethodPayload: p.MethodPayload,
+		CallbackURL:   p.CallbackURL,
 	}
 	if p.ProviderRef != nil {
 		view.ProviderRef = *p.ProviderRef

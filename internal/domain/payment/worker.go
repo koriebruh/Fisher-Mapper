@@ -31,6 +31,11 @@ type ChargeTaskInput struct {
 	PaymentMethod  string            `json:"payment_method"`
 	Metadata       map[string]string `json:"metadata"`
 
+	// CallbackURL is carried on the task payload (rather than re-fetched
+	// from the payment row) so ProcessCharge's callback delivery (Step 6)
+	// doesn't need an extra read -- nil when the caller didn't set one.
+	CallbackURL *string `json:"callback_url,omitempty"`
+
 	// TraceCarrier is the Fase 5 trace-propagation payload: the W3C
 	// traceparent (+ tracestate, if any) captured via
 	// otel.GetTextMapPropagator().Inject at outbox-insert time (see

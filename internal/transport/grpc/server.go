@@ -8,11 +8,13 @@ package grpc
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/google/uuid"
 
 	"Fisher-Mapper/internal/domain/apperror"
 	"Fisher-Mapper/internal/domain/payment"
+	"Fisher-Mapper/internal/provider/payload"
 	pb "Fisher-Mapper/internal/transport/grpc/pb/payment/v1"
 )
 
@@ -64,8 +66,78 @@ func NewServer(service *payment.Service) *Server {
 // template with no live production traffic; a real deployment carrying live
 // in-flight idempotency keys across this exact change would need a
 // dual-read migration window instead.
+//
+// Adding CallbackURL to CreatePaymentInput/CreatePayoutInput is the SAME
+// class of change, applied deliberately a second time for the identical
+// reason (a real caller-supplied field, not derived) -- accepted with the
+// same one-time-migration-cost reasoning as above, not an oversight.
 func fingerprintBasis(v any) ([]byte, error) {
 	return json.Marshal(v)
+}
+
+// stringPtrOrNil treats proto3's empty-string zero value as "not set" --
+// the same convention CreatePaymentRequest/CreatePayoutRequest's
+// source_app/description fields already use (see their proto doc).
+func stringPtrOrNil(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+func derefOrEmpty(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// timePtrToRFC3339 converts payload's *time.Time fields to the proto string
+// wire representation (see MethodPayload's proto doc on why a plain RFC3339
+// string, not google.protobuf.Timestamp). No inverse is needed: MethodPayload
+// only ever flows server -> client (GetPayment), never the other way.
+func timePtrToRFC3339(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.Format(time.RFC3339)
+}
+
+// methodPayloadToPB mirrors REST's paymentView.MethodPayload exposure --
+// only the field matching mp.Method carries data, the rest are left as
+// proto3's absent-message zero value (nil), the wire-level equivalent of
+// REST's JSON null.
+func methodPayloadToPB(mp *payload.MethodPayload) *pb.MethodPayload {
+	if mp == nil {
+		return nil
+	}
+	out := &pb.MethodPayload{Method: mp.Method}
+	if mp.QRIS != nil {
+		out.Qris = &pb.QRIS{
+			QrString:  derefOrEmpty(mp.QRIS.QRString),
+			ExpiresAt: timePtrToRFC3339(mp.QRIS.ExpiresAt),
+		}
+	}
+	if mp.VirtualAccount != nil {
+		out.VirtualAccount = &pb.VirtualAccount{
+			BankCode:  mp.VirtualAccount.BankCode,
+			VaNumber:  mp.VirtualAccount.VANumber,
+			ExpiresAt: timePtrToRFC3339(mp.VirtualAccount.ExpiresAt),
+		}
+	}
+	if mp.Card != nil {
+		out.Card = &pb.Card{
+			MaskedPan:   derefOrEmpty(mp.Card.MaskedPAN),
+			RedirectUrl: derefOrEmpty(mp.Card.RedirectURL),
+		}
+	}
+	if mp.EWallet != nil {
+		out.Ewallet = &pb.EWallet{
+			RedirectUrl: derefOrEmpty(mp.EWallet.RedirectURL),
+			ExpiresAt:   timePtrToRFC3339(mp.EWallet.ExpiresAt),
+		}
+	}
+	return out
 }
 
 // CreatePayment mirrors rest.handleCreatePayment: decode -> call
@@ -83,6 +155,7 @@ func (s *Server) CreatePayment(ctx context.Context, req *pb.CreatePaymentRequest
 		Provider:      req.GetProvider(),
 		PaymentMethod: req.GetPaymentMethod(),
 		Metadata:      req.GetMetadata(),
+		CallbackURL:   stringPtrOrNil(req.GetCallbackUrl()),
 		Envelope:      buildEnvelope(req.GetSourceApp(), req.GetDescription()),
 	}
 
@@ -146,6 +219,9 @@ func (s *Server) GetPayment(ctx context.Context, req *pb.GetPaymentRequest) (*pb
 	if p.ProviderRef != nil {
 		resp.ProviderRef = *p.ProviderRef
 	}
+	resp.PaymentMethod = p.PaymentMethod
+	resp.MethodPayload = methodPayloadToPB(p.MethodPayload)
+	resp.CallbackUrl = derefOrEmpty(p.CallbackURL)
 	return resp, nil
 }
 
@@ -250,6 +326,7 @@ func (s *Server) CreatePayout(ctx context.Context, req *pb.CreatePayoutRequest) 
 		Provider:    req.GetProvider(),
 		Destination: req.GetDestination(),
 		Metadata:    req.GetMetadata(),
+		CallbackURL: stringPtrOrNil(req.GetCallbackUrl()),
 		Envelope:    buildEnvelope(req.GetSourceApp(), req.GetDescription()),
 	}
 
@@ -308,5 +385,6 @@ func (s *Server) GetPayout(ctx context.Context, req *pb.GetPayoutRequest) (*pb.G
 	if p.ProviderRef != nil {
 		resp.ProviderRef = *p.ProviderRef
 	}
+	resp.CallbackUrl = derefOrEmpty(p.CallbackURL)
 	return resp, nil
 }

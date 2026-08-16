@@ -29,6 +29,10 @@ type createPayoutRequest struct {
 	// completeness as charge/refund.
 	SourceApp   *string `json:"source_app,omitempty"`
 	Description *string `json:"description,omitempty"`
+
+	// CallbackURL mirrors createPaymentRequest's field -- see
+	// payment.CreatePayoutInput.CallbackURL's doc.
+	CallbackURL *string `json:"callback_url,omitempty"`
 }
 
 // RegisterPayoutRoutes registers the payout endpoints on router -- same thin
@@ -59,6 +63,7 @@ func handleCreatePayout(deps PaymentDeps) fiber.Handler {
 			Provider:    req.Provider,
 			Destination: req.Destination,
 			Metadata:    req.Metadata,
+			CallbackURL: req.CallbackURL,
 			Envelope:    buildEnvelope(c, req.SourceApp, req.Description),
 		}
 
@@ -80,6 +85,12 @@ type payoutView struct {
 	Status      string    `json:"status"`
 	ProviderRef string    `json:"provider_ref,omitempty"`
 
+	// CallbackURL: no omitempty, deliberately -- see paymentView's identical
+	// comment. A payout has no PaymentMethod/MethodPayload analogue (it
+	// disburses to an opaque Destination, not via a payment method the way
+	// a charge does), so those have no counterpart here.
+	CallbackURL *string `json:"callback_url"`
+
 	// Envelope fields, exposed verbatim -- mirrors paymentView/refundView.
 	SourceApp        string `json:"source_app,omitempty"`
 	Channel          string `json:"channel"`
@@ -96,6 +107,7 @@ func newPayoutView(p *payment.Payout) payoutView {
 		Status:      string(p.Status),
 		Channel:     p.Channel,
 		InitiatedBy: p.InitiatedBy,
+		CallbackURL: p.CallbackURL,
 	}
 	if p.ProviderRef != nil {
 		view.ProviderRef = *p.ProviderRef

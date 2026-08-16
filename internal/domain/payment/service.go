@@ -32,6 +32,12 @@ type CreatePaymentInput struct {
 	PaymentMethod string
 	Metadata      map[string]string
 
+	// CallbackURL is an optional caller-supplied best-effort delivery
+	// target, validated by ValidateCallbackURL below and notified once this
+	// payment reaches a terminal status (see Service.WithCallbackNotifier).
+	// Nil when the caller didn't set one.
+	CallbackURL *string
+
 	// Envelope is populated entirely by the TRANSPORT layer (REST/gRPC),
 	// never derived here -- see Envelope's own doc for which sub-fields are
 	// caller-supplied vs transport-set. RequestIP/RequestUserAgent/TraceID
@@ -233,6 +239,11 @@ func (s *Service) CreatePayment(ctx context.Context, in CreatePaymentInput, idem
 	if err := ValidateCurrency(in.Currency); err != nil {
 		return CreatePaymentOutput{}, err
 	}
+	if in.CallbackURL != nil {
+		if err := ValidateCallbackURL(*in.CallbackURL); err != nil {
+			return CreatePaymentOutput{}, err
+		}
+	}
 
 	fingerprint := fingerprintOf(rawBody)
 
@@ -283,6 +294,7 @@ func (s *Service) doCreatePayment(ctx context.Context, in CreatePaymentInput, id
 		OperationType: OperationCharge,
 		Provider:      in.Provider,
 		PaymentMethod: in.PaymentMethod,
+		CallbackURL:   in.CallbackURL,
 		Envelope:      in.Envelope,
 	}
 
@@ -295,6 +307,7 @@ func (s *Service) doCreatePayment(ctx context.Context, in CreatePaymentInput, id
 		Provider:       in.Provider,
 		PaymentMethod:  in.PaymentMethod,
 		Metadata:       in.Metadata,
+		CallbackURL:    in.CallbackURL,
 		// Fase 5 item 5: snapshot ctx's current span (the HTTP request span,
 		// if the caller is rest.handleCreatePayment using c.UserContext())
 		// so ProcessCharge can continue the same trace -- see

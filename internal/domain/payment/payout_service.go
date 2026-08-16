@@ -31,6 +31,9 @@ type CreatePayoutInput struct {
 	Destination string
 	Metadata    map[string]string
 
+	// CallbackURL mirrors CreatePaymentInput.CallbackURL's doc exactly.
+	CallbackURL *string
+
 	// Envelope mirrors CreatePaymentInput.Envelope's doc exactly -- see there
 	// for why RequestIP/RequestUserAgent/TraceID stay out of the gRPC
 	// fingerprint basis. Payout must carry the SAME envelope completeness as
@@ -61,6 +64,9 @@ type PayoutTaskInput struct {
 	Destination    string            `json:"destination"`
 	Metadata       map[string]string `json:"metadata"`
 
+	// CallbackURL mirrors ChargeTaskInput.CallbackURL's doc exactly.
+	CallbackURL *string `json:"callback_url,omitempty"`
+
 	// TraceCarrier mirrors ChargeTaskInput.TraceCarrier -- see worker.go's
 	// injectTraceCarrier/extractTraceCarrierAndStartSpan doc.
 	TraceCarrier map[string]string `json:"trace_carrier,omitempty"`
@@ -85,6 +91,11 @@ func (s *Service) CreatePayout(ctx context.Context, in CreatePayoutInput, idempo
 	}
 	if err := ValidateCurrency(in.Currency); err != nil {
 		return CreatePayoutOutput{}, err
+	}
+	if in.CallbackURL != nil {
+		if err := ValidateCallbackURL(*in.CallbackURL); err != nil {
+			return CreatePayoutOutput{}, err
+		}
 	}
 
 	fingerprint := fingerprintOf(rawBody)
@@ -133,6 +144,7 @@ func (s *Service) doCreatePayout(ctx context.Context, in CreatePayoutInput, idem
 		Amount:      in.Amount,
 		Provider:    in.Provider,
 		Destination: in.Destination,
+		CallbackURL: in.CallbackURL,
 		Envelope:    in.Envelope,
 	}
 
@@ -145,6 +157,7 @@ func (s *Service) doCreatePayout(ctx context.Context, in CreatePayoutInput, idem
 		Provider:       in.Provider,
 		Destination:    in.Destination,
 		Metadata:       in.Metadata,
+		CallbackURL:    in.CallbackURL,
 		TraceCarrier:   injectTraceCarrier(ctx),
 	}
 
