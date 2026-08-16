@@ -13,6 +13,8 @@ package provider
 import (
 	"context"
 	"time"
+
+	"Fisher-Mapper/internal/provider/payload"
 )
 
 // Status is the provider-reported outcome of an operation. It is a
@@ -87,6 +89,14 @@ type ChargeResponse struct {
 	ProviderRef string
 	Status      Status
 	RawResponse []byte
+
+	// MethodPayload carries the method-specific data a caller needs to
+	// actually complete the payment (a QRIS string to render, a VA number to
+	// display, a card redirect URL, ...) -- nil when PaymentMethod has no
+	// such payload (or the provider didn't return one). Populated even on a
+	// "processing" Status: a QRIS string is typically returned while the
+	// charge is still pending scan-to-pay, not only once it succeeds.
+	MethodPayload *payload.MethodPayload
 }
 
 // GetStatusRequest polls a provider for the current state of a previously

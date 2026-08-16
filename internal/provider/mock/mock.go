@@ -8,13 +8,16 @@ package mock
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
 	"Fisher-Mapper/internal/provider"
+	"Fisher-Mapper/internal/provider/payload"
 )
 
 type Config struct {
@@ -136,6 +139,38 @@ func providerRef(prefix, idempotencyKey string) string {
 	return prefix + "_" + hex.EncodeToString(sum[:])[:20]
 }
 
+// vaNumberFrom derives a deterministic all-digit virtual-account number from
+// providerRef (a hex string) -- a real VA number is numeric, so substringing
+// the hex ref directly would produce non-digit characters.
+func vaNumberFrom(ref string) string {
+	sum := sha256.Sum256([]byte(ref))
+	n := binary.BigEndian.Uint64(sum[:8])
+	return fmt.Sprintf("%016d", n)
+}
+
+// methodPayloadFor builds the deterministic per-method payload a real PJP
+// would return alongside a charge -- nil for any method with no such payload
+// (e.g. an unrecognized/empty PaymentMethod), so Charge never fabricates a
+// payload the caller didn't ask for.
+func methodPayloadFor(method, providerRef string, now time.Time) *payload.MethodPayload {
+	switch method {
+	case "qris":
+		qr := "QR-" + providerRef
+		exp := now.Add(15 * time.Minute)
+		return &payload.MethodPayload{Method: method, QRIS: &payload.QRIS{QRString: &qr, ExpiresAt: &exp}}
+	case "virtual_account", "va":
+		exp := now.Add(24 * time.Hour)
+		return &payload.MethodPayload{Method: method, VirtualAccount: &payload.VirtualAccount{
+			BankCode: "MOCK", VANumber: vaNumberFrom(providerRef), ExpiresAt: &exp,
+		}}
+	case "card", "cc":
+		masked := "411111******1111"
+		return &payload.MethodPayload{Method: method, Card: &payload.Card{MaskedPAN: &masked}}
+	default:
+		return nil
+	}
+}
+
 func rawResponse(v any) []byte {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -205,9 +240,10 @@ func (m *Mock) Charge(ctx context.Context, req provider.ChargeRequest) (provider
 	m.charges[ref] = chargeRecord{amount: req.Amount, currency: req.Currency}
 	m.mu.Unlock()
 	return provider.ChargeResponse{
-		ProviderRef: ref,
-		Status:      m.cfg.Status,
-		RawResponse: rawResponse(map[string]any{"provider_ref": ref, "status": m.cfg.Status}),
+		ProviderRef:   ref,
+		Status:        m.cfg.Status,
+		RawResponse:   rawResponse(map[string]any{"provider_ref": ref, "status": m.cfg.Status}),
+		MethodPayload: methodPayloadFor(req.PaymentMethod, ref, time.Now().UTC()),
 	}, nil
 }
 

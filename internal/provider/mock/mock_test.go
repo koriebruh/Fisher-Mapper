@@ -58,6 +58,80 @@ func TestMock_ForceErrorAppliesToAllMethods(t *testing.T) {
 	}
 }
 
+// TestMock_ChargeMethodPayloadShapePerPaymentMethod asserts Charge populates
+// exactly the payload variant matching PaymentMethod (all others nil), and
+// nil MethodPayload entirely for anything else -- the shape a real REST/gRPC
+// GetPayment response is expected to expose verbatim (Step 3+).
+func TestMock_ChargeMethodPayloadShapePerPaymentMethod(t *testing.T) {
+	m := New(Config{Name: "mock"})
+
+	t.Run("qris", func(t *testing.T) {
+		resp, err := m.Charge(context.Background(), provider.ChargeRequest{IdempotencyKey: "qris-key", PaymentMethod: "qris"})
+		if err != nil {
+			t.Fatalf("Charge: %v", err)
+		}
+		mp := resp.MethodPayload
+		if mp == nil || mp.QRIS == nil {
+			t.Fatalf("MethodPayload.QRIS = nil, want set")
+		}
+		if mp.VirtualAccount != nil || mp.Card != nil || mp.EWallet != nil {
+			t.Errorf("non-QRIS variants must stay nil, got %+v", mp)
+		}
+		if mp.QRIS.QRString == nil || *mp.QRIS.QRString == "" {
+			t.Error("QRIS.QRString must be a non-empty pointer")
+		}
+		if mp.QRIS.ExpiresAt == nil {
+			t.Error("QRIS.ExpiresAt must be set")
+		}
+	})
+
+	t.Run("virtual_account", func(t *testing.T) {
+		resp, err := m.Charge(context.Background(), provider.ChargeRequest{IdempotencyKey: "va-key", PaymentMethod: "virtual_account"})
+		if err != nil {
+			t.Fatalf("Charge: %v", err)
+		}
+		mp := resp.MethodPayload
+		if mp == nil || mp.VirtualAccount == nil {
+			t.Fatalf("MethodPayload.VirtualAccount = nil, want set")
+		}
+		if mp.QRIS != nil || mp.Card != nil || mp.EWallet != nil {
+			t.Errorf("non-VA variants must stay nil, got %+v", mp)
+		}
+		for _, r := range mp.VirtualAccount.VANumber {
+			if r < '0' || r > '9' {
+				t.Fatalf("VANumber must be all digits, got %q", mp.VirtualAccount.VANumber)
+			}
+		}
+	})
+
+	t.Run("card", func(t *testing.T) {
+		resp, err := m.Charge(context.Background(), provider.ChargeRequest{IdempotencyKey: "card-key", PaymentMethod: "card"})
+		if err != nil {
+			t.Fatalf("Charge: %v", err)
+		}
+		mp := resp.MethodPayload
+		if mp == nil || mp.Card == nil {
+			t.Fatalf("MethodPayload.Card = nil, want set")
+		}
+		if mp.QRIS != nil || mp.VirtualAccount != nil || mp.EWallet != nil {
+			t.Errorf("non-Card variants must stay nil, got %+v", mp)
+		}
+		if mp.Card.MaskedPAN == nil || *mp.Card.MaskedPAN == "" {
+			t.Error("Card.MaskedPAN must be a non-empty pointer")
+		}
+	})
+
+	t.Run("unrecognized method -> nil payload", func(t *testing.T) {
+		resp, err := m.Charge(context.Background(), provider.ChargeRequest{IdempotencyKey: "other-key", PaymentMethod: "bank_transfer"})
+		if err != nil {
+			t.Fatalf("Charge: %v", err)
+		}
+		if resp.MethodPayload != nil {
+			t.Errorf("MethodPayload = %+v, want nil for an unrecognized payment method", resp.MethodPayload)
+		}
+	})
+}
+
 // TestMock_LatencyLongerThanContextDeadlineTimesOut simulates the
 // "provider call timed out" case Phase 3 exercises for real: Latency is
 // configured longer than the caller's context deadline, so Charge must
