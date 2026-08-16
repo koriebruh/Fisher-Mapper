@@ -1,6 +1,10 @@
 # Bootstrap config — loaded after hardcoded defaults, before env var
 # overrides. See internal/platform/config/bootstrap.go's Env* constants for
-# the full, authoritative list of override names (one per field below).
+# the full, authoritative list of override names for the BOOTSTRAP sections
+# below ([postgres] through [worker]) -- the dynamic-config-seeded sections
+# further down ([queue]/[observability]/[ratelimit].enabled/etc., see that
+# section's own header comment) have no Env* override of their own; they're
+# overridden by writing to app_config instead.
 #
 # This file MUST only contain values needed before any connection exists, or
 # process tuning that is read once at startup (not a feature flag meant to
@@ -94,9 +98,15 @@ burst = 40 # bootstrap-only: token-bucket max burst size, read once at startup
 
 [circuitbreaker]
 enabled = true # false bypasses the per-provider breaker so calls reach the provider regardless of trip state (e.g. a sandbox PJP that intentionally simulates failures)
+# The breaker's failure-threshold/cooldown SIZING lives under [worker]
+# (breaker_failure_threshold/breaker_cooldown_seconds) -- bootstrap tuning,
+# not dynamic config, same split as [ratelimit]'s rate_per_second/burst above.
 
 [reconciliation]
 enabled = true # false pauses the reconciliation job (e.g. during a maintenance window) without stopping the rest of the worker process
+# The job's poll interval/stuck threshold live under [worker]
+# (reconciliation_poll_interval_seconds/reconciliation_stuck_threshold_seconds)
+# -- bootstrap tuning, not dynamic config, same split as [ratelimit] above.
 
 # No [webhook] verify-signature toggle here on purpose: a DB-flippable
 # bypass on a money endpoint would let anyone with admin-config access forge
