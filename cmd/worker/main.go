@@ -54,7 +54,7 @@ import (
 
 func main() {
 	if err := run_(); err != nil {
-		slog.Error("worker exited with error", "error", err)
+		slog.Error("[worker] main: worker exited with error", "component", "worker", "error", err)
 		os.Exit(1)
 	}
 }
@@ -378,25 +378,25 @@ var callbackHTTPClient = &http.Client{
 func httpCallbackNotifier(ctx context.Context, url string, payload payment.CallbackPayload) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		slog.Error("callback notifier: marshal payload", "url", url, "error", err)
+		slog.Error("[worker] httpCallbackNotifier: marshal payload", "component", "worker", "url", url, "error", err)
 		return
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		slog.Error("callback notifier: build request", "url", url, "error", err)
+		slog.Error("[worker] httpCallbackNotifier: build request", "component", "worker", "url", url, "error", err)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := callbackHTTPClient.Do(req)
 	if err != nil {
-		slog.Warn("callback notifier: delivery failed", "url", url, "error", err)
+		slog.Warn("[worker] httpCallbackNotifier: delivery failed", "component", "worker", "url", url, "error", err)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		slog.Warn("callback notifier: non-2xx response", "url", url, "status", resp.StatusCode)
+		slog.Warn("[worker] httpCallbackNotifier: non-2xx response", "component", "worker", "url", url, "status", resp.StatusCode)
 	}
 }

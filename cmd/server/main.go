@@ -62,7 +62,7 @@ import (
 
 func main() {
 	if err := run_(); err != nil {
-		slog.Error("server exited with error", "error", err)
+		slog.Error("[server] main: server exited with error", "component", "server", "error", err)
 		os.Exit(1)
 	}
 }
