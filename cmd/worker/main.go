@@ -44,48 +44,11 @@ import (
 	"Fisher-Mapper/internal/resilience/circuitbreaker"
 )
 
-// Defaults for the resilience stubs. These are exactly the kind of values
-// the full plan puts in Fase 4's dynamic config (app_config) -- Fase 3
-// hardcodes them here deliberately, since dynamic config does not exist
-// yet and building it now would be scope creep for this phase.
-const (
-	breakerFailureThreshold = 5
-	breakerCooldown         = 30 * time.Second
-	bulkheadCapacityPerProv = 4
-	asynqConcurrency        = 10
-	relayBaseInterval       = 2 * time.Second
-	relayMaxInterval        = 30 * time.Second
-	relayBatchSize          = 50
-	redisHealthInterval     = 2 * time.Second
-
-	// Fase 4 dynamic config: refreshInterval is deliberately short (rather
-	// than, say, a minute) so the plan's "behavior berubah tanpa restart
-	// (dalam interval refresh)" validation step is observable in a
-	// reasonable amount of time -- a template default, tune per deployment.
-	dynamicConfigRefreshInterval = 5 * time.Second
-
-	// Fase 4 reconciliation: pollInterval is how often the job runs;
-	// stuckThreshold is how long a payment must have sat in "processing"
-	// (since its last applied event) before the job will touch it at all.
-	reconciliationPollInterval   = 15 * time.Second
-	reconciliationStuckThreshold = 1 * time.Minute
-
-	// Fase 5 metrics: metricsPollInterval governs the DB-pool-stats +
-	// terminal_failures-depth poller actor (see internal/platform/observability.Poller).
-	metricsPollInterval = 15 * time.Second
-)
-
-// defaultWorkerMetricsPort is deliberately DIFFERENT from cmd/server's
-// implicit metrics exposure (cmd/server serves /metrics on its own HTTP
-// port, cfg.HTTP.Port) -- this process has no fiber app/HTTP port of its
-// own, and per the Makefile, cmd/server and cmd/worker normally run as two
-// processes on the SAME host (not two docker-compose containers), so this
-// needs its own port to avoid a bind conflict. Read directly via
-// APP_WORKER_METRICS_PORT (like configPath's APP_CONFIG_FILE below) rather
-// than added to the shared config.Bootstrap struct/config.toml, since that
-// struct is loaded identically by both binaries -- a single shared port
-// field would collide the same way.
-const defaultWorkerMetricsPort = "9101"
+// All resilience/queue/reconciliation/metrics tuning below is read from
+// cfg.Worker (internal/platform/config.Worker, config.toml [worker]) rather
+// than hardcoded here -- see that struct's doc for why every value belongs
+// in bootstrap config, not app_config: none of it is a feature flag meant to
+// flip live, it's process tuning consumed once at startup.
 
 func main() {
 	if err := run_(); err != nil {
@@ -171,7 +134,7 @@ func run_() error {
 	// Ping) -- every refresh AFTER this one falls back to the last-known-
 	// good snapshot instead (see internal/platform/config.Cache.Run).
 	dynamicStore := config.NewDynamicStore(pool)
-	dynamicCache := config.NewCache(dynamicStore, dynamicConfigRefreshInterval)
+	dynamicCache := config.NewCache(dynamicStore, time.Duration(cfg.Worker.DynamicConfigRefreshIntervalSeconds)*time.Second)
 	if err := dynamicCache.Load(ctx); err != nil {
 		return fmt.Errorf("load dynamic config: %w", err)
 	}
@@ -202,8 +165,8 @@ func run_() error {
 	idemStore := idempotency.NewPGStore(pool)
 	paymentRepo := payment.NewPGRepository(pool)
 	webhookStore := webhook.NewStore(pool)
-	breakers := circuitbreaker.NewRegistry(breakerFailureThreshold, breakerCooldown)
-	bulkheadLimiter := bulkhead.New(bulkheadCapacityPerProv)
+	breakers := circuitbreaker.NewRegistry(cfg.Worker.BreakerFailureThreshold, time.Duration(cfg.Worker.BreakerCooldownSeconds)*time.Second)
+	bulkheadLimiter := bulkhead.New(cfg.Worker.BulkheadCapacityPerProvider)
 
 	paymentService := payment.NewService(paymentRepo, idemStore, providers).
 		WithWebhookStaging(webhookStore).
@@ -260,7 +223,7 @@ func run_() error {
 	})
 
 	asynqClient := queue.NewAsynqClient(cfg.Redis.Addr)
-	redisHealth := queue.NewRedisHealthChecker(cfg.Redis.Addr, redisHealthInterval)
+	redisHealth := queue.NewRedisHealthChecker(cfg.Redis.Addr, time.Duration(cfg.Worker.RedisHealthIntervalSeconds)*time.Second)
 	switchingClient := queue.NewSwitchingClient(asynqClient, memoryClient, redisHealth)
 	defer func() {
 		if err := switchingClient.Close(); err != nil {
@@ -273,7 +236,10 @@ func run_() error {
 	// other half, right before the actual provider call, lives inside
 	// paymentService.ProcessCharge/ProcessRefund above).
 	outboxStore := outbox.NewStore(pool)
-	relay := outbox.NewRelay(outboxStore, switchingClient, relayBaseInterval, relayMaxInterval, relayBatchSize).
+	relay := outbox.NewRelay(outboxStore, switchingClient,
+		time.Duration(cfg.Worker.RelayBaseIntervalSeconds)*time.Second,
+		time.Duration(cfg.Worker.RelayMaxIntervalSeconds)*time.Second,
+		cfg.Worker.RelayBatchSize).
 		WithProviderEnabledCheck(dynamicCache.ProviderEnabled).
 		WithQueueName(func() string { return queueName })
 	if metrics != nil {
@@ -300,16 +266,18 @@ func run_() error {
 	})
 
 	// Fase 4 reconciliation job: polls payments stuck "processing" past
-	// reconciliationStuckThreshold and sweeps staged webhook events with no
-	// matching payment yet. See internal/messaging/reconciliation and
-	// internal/domain/payment/reconcile.go.
-	reconciler := reconciliation.New(paymentService, reconciliationPollInterval, reconciliationStuckThreshold).
+	// cfg.Worker.ReconciliationStuckThresholdSeconds and sweeps staged
+	// webhook events with no matching payment yet. See
+	// internal/messaging/reconciliation and internal/domain/payment/reconcile.go.
+	reconciler := reconciliation.New(paymentService,
+		time.Duration(cfg.Worker.ReconciliationPollIntervalSeconds)*time.Second,
+		time.Duration(cfg.Worker.ReconciliationStuckThresholdSeconds)*time.Second).
 		WithEnabledCheck(func() bool { return dynamicCache.ReconciliationEnabled(dynSeed.ReconciliationEnabled) })
 
 	asynqServer := asynq.NewServer(
 		asynq.RedisClientOpt{Addr: cfg.Redis.Addr},
 		asynq.Config{
-			Concurrency: asynqConcurrency,
+			Concurrency: cfg.Worker.AsynqConcurrency,
 			// Queues must list every queue name the relay might dispatch
 			// into (here, just the one queueName snapshot above) -- asynq
 			// defaults to consuming only "default" otherwise, which would
@@ -339,24 +307,22 @@ func run_() error {
 	// terminal_failures depth gauge (see metrics.go's doc on why this
 	// process, not cmd/server, owns that count).
 	if metrics != nil {
-		poller := observability.NewPoller(pool, terminalFailures.Count, metrics, metricsPollInterval)
+		poller := observability.NewPoller(pool, terminalFailures.Count, metrics, time.Duration(cfg.Worker.MetricsPollIntervalSeconds)*time.Second)
 		pollerExecute, pollerInterrupt := lifecycle.RunnerActor(poller.Run)
 		g.Add(pollerExecute, pollerInterrupt)
 	}
 
 	// Fase 5 metrics endpoint: this process has no fiber app of its own
 	// (unlike cmd/server), so /metrics gets a dedicated, minimal net/http
-	// listener on its own port instead of a fiber route -- see
-	// defaultWorkerMetricsPort's doc for why that port can't come from the
-	// shared config.Bootstrap struct.
+	// listener on its own port instead of a fiber route. cfg.Worker.MetricsPort
+	// is its own Bootstrap field (not cfg.HTTP.Port, which cmd/server uses for
+	// the same purpose) since the two processes normally run on the same host
+	// (see the Makefile's `make run`/`make run-worker`) and would otherwise
+	// collide on one shared port.
 	if promRegistry != nil {
 		metricsMux := http.NewServeMux()
 		metricsMux.Handle("/metrics", promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{}))
-		metricsPort := os.Getenv("APP_WORKER_METRICS_PORT")
-		if metricsPort == "" {
-			metricsPort = defaultWorkerMetricsPort
-		}
-		metricsSrv := &http.Server{Addr: ":" + metricsPort, Handler: metricsMux}
+		metricsSrv := &http.Server{Addr: ":" + cfg.Worker.MetricsPort, Handler: metricsMux}
 		metricsExecute, metricsInterrupt := lifecycle.HTTPServerActor(metricsSrv, 5*time.Second)
 		g.Add(metricsExecute, metricsInterrupt)
 		logger.Info("worker metrics endpoint listening", "addr", metricsSrv.Addr)

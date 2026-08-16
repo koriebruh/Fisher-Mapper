@@ -30,6 +30,55 @@ type Bootstrap struct {
 	Log       Log
 	Service   Service
 	Ratelimit Ratelimit
+	Worker    Worker
+}
+
+// Worker holds cmd/worker's own process-tuning knobs -- all of it is
+// bootstrap config (process tuning, read once at startup to construct
+// resilience primitives/the asynq server/pollers), not dynamic config: none
+// of it is a feature flag that should flip live without a restart. TOML has
+// no native duration type, so every interval/timeout is seconds-as-integer,
+// converted to time.Duration at the one call site that needs it
+// (cmd/worker/main.go).
+type Worker struct {
+	// BreakerFailureThreshold/BreakerCooldownSeconds size the per-provider
+	// circuit breaker (internal/resilience/circuitbreaker).
+	BreakerFailureThreshold int `toml:"breaker_failure_threshold"`
+	BreakerCooldownSeconds  int `toml:"breaker_cooldown_seconds"`
+	// BulkheadCapacityPerProvider caps concurrent in-flight provider calls
+	// per provider, so one slow PJP can't starve the others.
+	BulkheadCapacityPerProvider int `toml:"bulkhead_capacity_per_provider"`
+	// AsynqConcurrency is how many charge/refund/payout tasks this worker
+	// processes at once.
+	AsynqConcurrency int `toml:"asynq_concurrency"`
+	// RelayBaseIntervalSeconds/RelayMaxIntervalSeconds/RelayBatchSize tune
+	// the outbox relay's poll backoff and how many rows it dispatches per
+	// poll (internal/messaging/outbox).
+	RelayBaseIntervalSeconds int `toml:"relay_base_interval_seconds"`
+	RelayMaxIntervalSeconds  int `toml:"relay_max_interval_seconds"`
+	RelayBatchSize           int `toml:"relay_batch_size"`
+	// RedisHealthIntervalSeconds governs how often the switching queue
+	// client re-checks Redis reachability to flip between the durable asynq
+	// client and the in-memory fallback.
+	RedisHealthIntervalSeconds int `toml:"redis_health_interval_seconds"`
+	// DynamicConfigRefreshIntervalSeconds is how often this process
+	// refreshes its app_config cache in the background.
+	DynamicConfigRefreshIntervalSeconds int `toml:"dynamic_config_refresh_interval_seconds"`
+	// ReconciliationPollIntervalSeconds/ReconciliationStuckThresholdSeconds
+	// tune the reconciliation job: how often it runs, and how long a
+	// payment must have sat in "processing" before it's touched.
+	ReconciliationPollIntervalSeconds   int `toml:"reconciliation_poll_interval_seconds"`
+	ReconciliationStuckThresholdSeconds int `toml:"reconciliation_stuck_threshold_seconds"`
+	// MetricsPollIntervalSeconds governs the DB-pool-stats +
+	// terminal_failures-depth poller actor.
+	MetricsPollIntervalSeconds int `toml:"metrics_poll_interval_seconds"`
+	// MetricsPort is this process's own GET /metrics listener port --
+	// deliberately its own field (not cfg.HTTP.Port, which cmd/server uses
+	// for the same purpose) since cmd/worker has no fiber app of its own and
+	// normally runs alongside cmd/server on the same host (see the
+	// Makefile's `make run`/`make run-worker`), so it needs a port that
+	// can't collide with cmd/server's.
+	MetricsPort string `toml:"metrics_port"`
 }
 
 // Service names this process for the OTel resource attribute and log
@@ -105,6 +154,21 @@ type fileConfig struct {
 		RatePerSecond *int `toml:"rate_per_second"`
 		Burst         *int `toml:"burst"`
 	} `toml:"ratelimit"`
+	Worker struct {
+		BreakerFailureThreshold             *int    `toml:"breaker_failure_threshold"`
+		BreakerCooldownSeconds              *int    `toml:"breaker_cooldown_seconds"`
+		BulkheadCapacityPerProvider         *int    `toml:"bulkhead_capacity_per_provider"`
+		AsynqConcurrency                    *int    `toml:"asynq_concurrency"`
+		RelayBaseIntervalSeconds            *int    `toml:"relay_base_interval_seconds"`
+		RelayMaxIntervalSeconds             *int    `toml:"relay_max_interval_seconds"`
+		RelayBatchSize                      *int    `toml:"relay_batch_size"`
+		RedisHealthIntervalSeconds          *int    `toml:"redis_health_interval_seconds"`
+		DynamicConfigRefreshIntervalSeconds *int    `toml:"dynamic_config_refresh_interval_seconds"`
+		ReconciliationPollIntervalSeconds   *int    `toml:"reconciliation_poll_interval_seconds"`
+		ReconciliationStuckThresholdSeconds *int    `toml:"reconciliation_stuck_threshold_seconds"`
+		MetricsPollIntervalSeconds          *int    `toml:"metrics_poll_interval_seconds"`
+		MetricsPort                         *string `toml:"metrics_port"`
+	} `toml:"worker"`
 }
 
 // defaultBootstrap must be enough on its own for the server to start against
@@ -132,6 +196,21 @@ func defaultBootstrap() Bootstrap {
 		Ratelimit: Ratelimit{
 			RatePerSecond: 20,
 			Burst:         40,
+		},
+		Worker: Worker{
+			BreakerFailureThreshold:             5,
+			BreakerCooldownSeconds:              30,
+			BulkheadCapacityPerProvider:         4,
+			AsynqConcurrency:                    10,
+			RelayBaseIntervalSeconds:            2,
+			RelayMaxIntervalSeconds:             30,
+			RelayBatchSize:                      50,
+			RedisHealthIntervalSeconds:          2,
+			DynamicConfigRefreshIntervalSeconds: 5,
+			ReconciliationPollIntervalSeconds:   15,
+			ReconciliationStuckThresholdSeconds: 60,
+			MetricsPollIntervalSeconds:          15,
+			MetricsPort:                         "9101",
 		},
 	}
 }
@@ -196,6 +275,45 @@ func overlayFile(cfg *Bootstrap, path string) error {
 	if fc.Ratelimit.Burst != nil {
 		cfg.Ratelimit.Burst = *fc.Ratelimit.Burst
 	}
+	if fc.Worker.BreakerFailureThreshold != nil {
+		cfg.Worker.BreakerFailureThreshold = *fc.Worker.BreakerFailureThreshold
+	}
+	if fc.Worker.BreakerCooldownSeconds != nil {
+		cfg.Worker.BreakerCooldownSeconds = *fc.Worker.BreakerCooldownSeconds
+	}
+	if fc.Worker.BulkheadCapacityPerProvider != nil {
+		cfg.Worker.BulkheadCapacityPerProvider = *fc.Worker.BulkheadCapacityPerProvider
+	}
+	if fc.Worker.AsynqConcurrency != nil {
+		cfg.Worker.AsynqConcurrency = *fc.Worker.AsynqConcurrency
+	}
+	if fc.Worker.RelayBaseIntervalSeconds != nil {
+		cfg.Worker.RelayBaseIntervalSeconds = *fc.Worker.RelayBaseIntervalSeconds
+	}
+	if fc.Worker.RelayMaxIntervalSeconds != nil {
+		cfg.Worker.RelayMaxIntervalSeconds = *fc.Worker.RelayMaxIntervalSeconds
+	}
+	if fc.Worker.RelayBatchSize != nil {
+		cfg.Worker.RelayBatchSize = *fc.Worker.RelayBatchSize
+	}
+	if fc.Worker.RedisHealthIntervalSeconds != nil {
+		cfg.Worker.RedisHealthIntervalSeconds = *fc.Worker.RedisHealthIntervalSeconds
+	}
+	if fc.Worker.DynamicConfigRefreshIntervalSeconds != nil {
+		cfg.Worker.DynamicConfigRefreshIntervalSeconds = *fc.Worker.DynamicConfigRefreshIntervalSeconds
+	}
+	if fc.Worker.ReconciliationPollIntervalSeconds != nil {
+		cfg.Worker.ReconciliationPollIntervalSeconds = *fc.Worker.ReconciliationPollIntervalSeconds
+	}
+	if fc.Worker.ReconciliationStuckThresholdSeconds != nil {
+		cfg.Worker.ReconciliationStuckThresholdSeconds = *fc.Worker.ReconciliationStuckThresholdSeconds
+	}
+	if fc.Worker.MetricsPollIntervalSeconds != nil {
+		cfg.Worker.MetricsPollIntervalSeconds = *fc.Worker.MetricsPollIntervalSeconds
+	}
+	if fc.Worker.MetricsPort != nil {
+		cfg.Worker.MetricsPort = *fc.Worker.MetricsPort
+	}
 	return nil
 }
 
@@ -210,6 +328,23 @@ const (
 	EnvServiceName            = "APP_SERVICE_NAME"
 	EnvRatelimitRatePerSecond = "APP_RATELIMIT_RATE_PER_SECOND"
 	EnvRatelimitBurst         = "APP_RATELIMIT_BURST"
+
+	EnvWorkerBreakerFailureThreshold             = "APP_WORKER_BREAKER_FAILURE_THRESHOLD"
+	EnvWorkerBreakerCooldownSeconds              = "APP_WORKER_BREAKER_COOLDOWN_SECONDS"
+	EnvWorkerBulkheadCapacityPerProvider         = "APP_WORKER_BULKHEAD_CAPACITY_PER_PROVIDER"
+	EnvWorkerAsynqConcurrency                    = "APP_WORKER_ASYNQ_CONCURRENCY"
+	EnvWorkerRelayBaseIntervalSeconds            = "APP_WORKER_RELAY_BASE_INTERVAL_SECONDS"
+	EnvWorkerRelayMaxIntervalSeconds             = "APP_WORKER_RELAY_MAX_INTERVAL_SECONDS"
+	EnvWorkerRelayBatchSize                      = "APP_WORKER_RELAY_BATCH_SIZE"
+	EnvWorkerRedisHealthIntervalSeconds          = "APP_WORKER_REDIS_HEALTH_INTERVAL_SECONDS"
+	EnvWorkerDynamicConfigRefreshIntervalSeconds = "APP_WORKER_DYNAMIC_CONFIG_REFRESH_INTERVAL_SECONDS"
+	EnvWorkerReconciliationPollIntervalSeconds   = "APP_WORKER_RECONCILIATION_POLL_INTERVAL_SECONDS"
+	EnvWorkerReconciliationStuckThresholdSeconds = "APP_WORKER_RECONCILIATION_STUCK_THRESHOLD_SECONDS"
+	EnvWorkerMetricsPollIntervalSeconds          = "APP_WORKER_METRICS_POLL_INTERVAL_SECONDS"
+	// EnvWorkerMetricsPort keeps the SAME env var name the pre-Bootstrap
+	// code used (os.Getenv("APP_WORKER_METRICS_PORT")) so existing
+	// deployments/.env files that already set it keep working unchanged.
+	EnvWorkerMetricsPort = "APP_WORKER_METRICS_PORT"
 )
 
 func overlayEnv(cfg *Bootstrap) error {
@@ -252,6 +387,45 @@ func overlayEnv(cfg *Bootstrap) error {
 			return fmt.Errorf("config: env %s must be an integer: %w", EnvRatelimitBurst, err)
 		}
 		cfg.Ratelimit.Burst = n
+	}
+	if err := overlayWorkerEnv(cfg); err != nil {
+		return err
+	}
+	return nil
+}
+
+// overlayWorkerEnv is split out of overlayEnv purely to keep that function's
+// line count from ballooning -- same overlay semantics (env var present and
+// non-blank wins over whatever cfg already holds).
+func overlayWorkerEnv(cfg *Bootstrap) error {
+	intEnvs := []struct {
+		name string
+		dst  *int
+	}{
+		{EnvWorkerBreakerFailureThreshold, &cfg.Worker.BreakerFailureThreshold},
+		{EnvWorkerBreakerCooldownSeconds, &cfg.Worker.BreakerCooldownSeconds},
+		{EnvWorkerBulkheadCapacityPerProvider, &cfg.Worker.BulkheadCapacityPerProvider},
+		{EnvWorkerAsynqConcurrency, &cfg.Worker.AsynqConcurrency},
+		{EnvWorkerRelayBaseIntervalSeconds, &cfg.Worker.RelayBaseIntervalSeconds},
+		{EnvWorkerRelayMaxIntervalSeconds, &cfg.Worker.RelayMaxIntervalSeconds},
+		{EnvWorkerRelayBatchSize, &cfg.Worker.RelayBatchSize},
+		{EnvWorkerRedisHealthIntervalSeconds, &cfg.Worker.RedisHealthIntervalSeconds},
+		{EnvWorkerDynamicConfigRefreshIntervalSeconds, &cfg.Worker.DynamicConfigRefreshIntervalSeconds},
+		{EnvWorkerReconciliationPollIntervalSeconds, &cfg.Worker.ReconciliationPollIntervalSeconds},
+		{EnvWorkerReconciliationStuckThresholdSeconds, &cfg.Worker.ReconciliationStuckThresholdSeconds},
+		{EnvWorkerMetricsPollIntervalSeconds, &cfg.Worker.MetricsPollIntervalSeconds},
+	}
+	for _, e := range intEnvs {
+		if v, ok := lookupEnv(e.name); ok {
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return fmt.Errorf("config: env %s must be an integer: %w", e.name, err)
+			}
+			*e.dst = n
+		}
+	}
+	if v, ok := lookupEnv(EnvWorkerMetricsPort); ok {
+		cfg.Worker.MetricsPort = v
 	}
 	return nil
 }

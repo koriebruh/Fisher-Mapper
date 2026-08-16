@@ -1,10 +1,12 @@
 # Bootstrap config — loaded after hardcoded defaults, before env var
-# overrides (APP_POSTGRES_DSN, APP_REDIS_ADDR, APP_HTTP_PORT, APP_GRPC_PORT,
-# APP_LOG_LEVEL).
+# overrides. See internal/platform/config/bootstrap.go's Env* constants for
+# the full, authoritative list of override names (one per field below).
 #
-# This file MUST only contain values needed before any connection exists.
-# Anything else (feature flags, retry counts, provider toggles) belongs in
-# the Postgres app_config table (dynamic config, loaded after DB connect).
+# This file MUST only contain values needed before any connection exists, or
+# process tuning that is read once at startup (not a feature flag meant to
+# flip live). Feature flags/toggles/thresholds meant to change without a
+# restart belong in the Postgres app_config table (dynamic config, loaded
+# after DB connect) instead.
 
 [postgres]
 dsn = "postgres://fisher:fisher@localhost:5432/fisher_mapper?sslmode=disable"
@@ -23,6 +25,25 @@ level = "info"
 
 [service]
 name = "fisher-mapper" # cmd/worker suffixes this ("-worker") rather than needing its own key
+
+# cmd/worker's own process tuning -- bootstrap config (read once at startup
+# to size resilience primitives/the asynq server/pollers), not app_config:
+# none of this is a feature flag meant to flip live. cmd/server never reads
+# this section.
+[worker]
+breaker_failure_threshold = 5 # per-provider circuit breaker: consecutive failures before it trips open
+breaker_cooldown_seconds = 30 # how long a tripped breaker stays open before allowing a trial call again
+bulkhead_capacity_per_provider = 4 # max concurrent in-flight provider calls per provider, so one slow PJP can't starve the others
+asynq_concurrency = 10 # how many charge/refund/payout tasks this worker processes at once
+relay_base_interval_seconds = 2 # outbox relay: poll interval when there's nothing to dispatch
+relay_max_interval_seconds = 30 # outbox relay: poll interval ceiling under backoff
+relay_batch_size = 50 # outbox relay: max rows dispatched per poll
+redis_health_interval_seconds = 2 # how often the switching queue client re-checks Redis reachability
+dynamic_config_refresh_interval_seconds = 5 # how often this process refreshes its app_config cache in the background
+reconciliation_poll_interval_seconds = 15 # how often the reconciliation job runs
+reconciliation_stuck_threshold_seconds = 60 # how long a payment must sit in "processing" before the job will touch it
+metrics_poll_interval_seconds = 15 # DB-pool-stats + terminal_failures-depth poller interval
+metrics_port = "9101" # this process's own GET /metrics port (separate from cmd/server's, since both normally run on the same host)
 
 # Everything below is process-tuning / feature-flag config, mostly NOT
 # bootstrap: most of it seeds dynamic config rows in Postgres app_config (see

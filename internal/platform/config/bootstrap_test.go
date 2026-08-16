@@ -42,6 +42,21 @@ name = "distinct-service"
 [ratelimit]
 rate_per_second = 7
 burst = 13
+
+[worker]
+breaker_failure_threshold = 9
+breaker_cooldown_seconds = 91
+bulkhead_capacity_per_provider = 6
+asynq_concurrency = 21
+relay_base_interval_seconds = 3
+relay_max_interval_seconds = 61
+relay_batch_size = 51
+redis_health_interval_seconds = 4
+dynamic_config_refresh_interval_seconds = 6
+reconciliation_poll_interval_seconds = 16
+reconciliation_stuck_threshold_seconds = 61
+metrics_poll_interval_seconds = 16
+metrics_port = "9199"
 `
 
 func TestLoad_TOMLOverlayOverridesDefaults(t *testing.T) {
@@ -77,6 +92,28 @@ func TestLoad_TOMLOverlayOverridesDefaults(t *testing.T) {
 	if cfg.Ratelimit.Burst != 13 || cfg.Ratelimit.Burst == def.Ratelimit.Burst {
 		t.Errorf("Ratelimit.Burst = %d, want file value distinct from default %d", cfg.Ratelimit.Burst, def.Ratelimit.Burst)
 	}
+
+	wantWorker := Worker{
+		BreakerFailureThreshold:             9,
+		BreakerCooldownSeconds:              91,
+		BulkheadCapacityPerProvider:         6,
+		AsynqConcurrency:                    21,
+		RelayBaseIntervalSeconds:            3,
+		RelayMaxIntervalSeconds:             61,
+		RelayBatchSize:                      51,
+		RedisHealthIntervalSeconds:          4,
+		DynamicConfigRefreshIntervalSeconds: 6,
+		ReconciliationPollIntervalSeconds:   16,
+		ReconciliationStuckThresholdSeconds: 61,
+		MetricsPollIntervalSeconds:          16,
+		MetricsPort:                         "9199",
+	}
+	if cfg.Worker != wantWorker {
+		t.Errorf("Worker = %+v, want file values %+v", cfg.Worker, wantWorker)
+	}
+	if cfg.Worker == def.Worker {
+		t.Error("Worker matches defaultBootstrap()'s Worker -- file overlay did not run")
+	}
 }
 
 func TestLoad_EnvOverridesTOML(t *testing.T) {
@@ -88,6 +125,19 @@ func TestLoad_EnvOverridesTOML(t *testing.T) {
 	t.Setenv(EnvServiceName, "env-service")
 	t.Setenv(EnvRatelimitRatePerSecond, "77")
 	t.Setenv(EnvRatelimitBurst, "88")
+	t.Setenv(EnvWorkerBreakerFailureThreshold, "101")
+	t.Setenv(EnvWorkerBreakerCooldownSeconds, "102")
+	t.Setenv(EnvWorkerBulkheadCapacityPerProvider, "103")
+	t.Setenv(EnvWorkerAsynqConcurrency, "104")
+	t.Setenv(EnvWorkerRelayBaseIntervalSeconds, "105")
+	t.Setenv(EnvWorkerRelayMaxIntervalSeconds, "106")
+	t.Setenv(EnvWorkerRelayBatchSize, "107")
+	t.Setenv(EnvWorkerRedisHealthIntervalSeconds, "108")
+	t.Setenv(EnvWorkerDynamicConfigRefreshIntervalSeconds, "109")
+	t.Setenv(EnvWorkerReconciliationPollIntervalSeconds, "110")
+	t.Setenv(EnvWorkerReconciliationStuckThresholdSeconds, "111")
+	t.Setenv(EnvWorkerMetricsPollIntervalSeconds, "112")
+	t.Setenv(EnvWorkerMetricsPort, "9200")
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -111,6 +161,25 @@ func TestLoad_EnvOverridesTOML(t *testing.T) {
 	}
 	if cfg.Ratelimit.Burst != 88 {
 		t.Errorf("Ratelimit.Burst = %d, want env override 88 (file had 13)", cfg.Ratelimit.Burst)
+	}
+
+	wantWorker := Worker{
+		BreakerFailureThreshold:             101,
+		BreakerCooldownSeconds:              102,
+		BulkheadCapacityPerProvider:         103,
+		AsynqConcurrency:                    104,
+		RelayBaseIntervalSeconds:            105,
+		RelayMaxIntervalSeconds:             106,
+		RelayBatchSize:                      107,
+		RedisHealthIntervalSeconds:          108,
+		DynamicConfigRefreshIntervalSeconds: 109,
+		ReconciliationPollIntervalSeconds:   110,
+		ReconciliationStuckThresholdSeconds: 111,
+		MetricsPollIntervalSeconds:          112,
+		MetricsPort:                         "9200",
+	}
+	if cfg.Worker != wantWorker {
+		t.Errorf("Worker = %+v, want env overrides %+v (file had distinct values)", cfg.Worker, wantWorker)
 	}
 	// Values not overridden by env must still come from the file, proving
 	// env-overlay only touches what it sets rather than resetting the
@@ -150,5 +219,12 @@ func TestLoad_InvalidEnvRatelimitReturnsError(t *testing.T) {
 	t.Setenv(EnvRatelimitBurst, "notanint")
 	if _, err := Load(""); err == nil {
 		t.Fatal("Load() with non-integer APP_RATELIMIT_BURST should return an error, got nil")
+	}
+}
+
+func TestLoad_InvalidEnvWorkerIntReturnsError(t *testing.T) {
+	t.Setenv(EnvWorkerAsynqConcurrency, "notanint")
+	if _, err := Load(""); err == nil {
+		t.Fatal("Load() with non-integer APP_WORKER_ASYNQ_CONCURRENCY should return an error, got nil")
 	}
 }
