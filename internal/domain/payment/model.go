@@ -162,6 +162,12 @@ type Payout struct {
 	// provider-side bank-account/e-wallet token, never raw bank/card
 	// account data) -- see provider.PayoutRequest.Destination.
 	Destination string
+
+	// CallbackURL mirrors Payment.CallbackURL's doc exactly -- a
+	// caller-supplied best-effort delivery target notified once this payout
+	// reaches a terminal status. Nil when the caller didn't set one.
+	CallbackURL *string
+
 	Status      Status
 	LastEventAt time.Time
 	CreatedAt   time.Time

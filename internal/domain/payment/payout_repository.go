@@ -49,13 +49,15 @@ func (r *PGRepository) CreatePayoutWithOutbox(ctx context.Context, p *Payout, wi
 
 	const insertSQL = `
 		INSERT INTO payouts (tenant_id, livemode, currency, amount, provider, destination, status,
-		    source_app, channel, trace_id, description, initiated_by, request_ip, request_user_agent)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		    source_app, channel, trace_id, description, initiated_by, request_ip, request_user_agent,
+		    callback_url)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		RETURNING id, status, last_event_at, created_at, updated_at`
 
 	err = tx.QueryRow(ctx, insertSQL,
 		p.TenantID, p.Livemode, p.Currency, p.Amount, p.Provider, p.Destination, StatusPending,
 		p.SourceApp, p.Channel, p.TraceID, p.Description, p.InitiatedBy, p.RequestIP, p.RequestUserAgent,
+		p.CallbackURL,
 	).Scan(&p.ID, &p.Status, &p.LastEventAt, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("payout: create with outbox: insert payout: %w", err)
@@ -156,13 +158,15 @@ func (r *PGRepository) SetPayoutProviderRef(ctx context.Context, id uuid.UUID, p
 // so the envelope columns can't drift out of sync between the two queries.
 const payoutSelectColumns = `id, tenant_id, livemode, currency, amount, provider,
 		       provider_ref, destination, status, last_event_at, created_at, updated_at,
-		       source_app, channel, trace_id, description, initiated_by, request_ip, request_user_agent`
+		       source_app, channel, trace_id, description, initiated_by, request_ip, request_user_agent,
+		       callback_url`
 
 func payoutScanDest(p *Payout) []any {
 	return []any{
 		&p.ID, &p.TenantID, &p.Livemode, &p.Currency, &p.Amount, &p.Provider,
 		&p.ProviderRef, &p.Destination, &p.Status, &p.LastEventAt, &p.CreatedAt, &p.UpdatedAt,
 		&p.SourceApp, &p.Channel, &p.TraceID, &p.Description, &p.InitiatedBy, &p.RequestIP, &p.RequestUserAgent,
+		&p.CallbackURL,
 	}
 }
 
