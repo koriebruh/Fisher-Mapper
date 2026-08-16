@@ -28,6 +28,6 @@ func LoadDotEnv() {
 		return
 	}
 	if err := godotenv.Load(DotEnvPath); err != nil {
-		slog.Warn("config: .env file present but failed to parse, ignoring", "path", DotEnvPath, "error", err)
+		slog.Warn("[config] LoadDotEnv: .env file present but failed to parse, ignoring", "component", "config", "path", DotEnvPath, "error", err)
 	}
 }

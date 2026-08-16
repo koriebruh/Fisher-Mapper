@@ -321,7 +321,7 @@ func (c *Cache) Refresh(ctx context.Context) {
 func (c *Cache) refresh(ctx context.Context) {
 	values, err := c.store.GetAll(ctx)
 	if err != nil {
-		slog.Warn("config: cache refresh failed, continuing to serve last-known-good snapshot", "error", err)
+		slog.Warn("[config] refresh: cache refresh failed, continuing to serve last-known-good snapshot", "component", "config", "error", err)
 		return
 	}
 	c.mu.Lock()
@@ -356,7 +356,7 @@ func (c *Cache) GetBool(key string, defaultValue bool) bool {
 	}
 	b, err := strconv.ParseBool(v)
 	if err != nil {
-		slog.Warn("config: cache: value is not a valid bool, using default", "key", key, "value", v)
+		slog.Warn("[config] GetBool: value is not a valid bool, using default", "component", "config", "key", key, "value", v)
 		return defaultValue
 	}
 	return b

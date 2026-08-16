@@ -56,7 +56,7 @@ func (tm *TracerManager) install(ctx context.Context, enabled bool) {
 
 	tp, err := buildStdoutTracerProvider(ctx, tm.serviceName)
 	if err != nil {
-		slog.Warn("observability: failed to build tracer provider, falling back to no-op", "error", err)
+		slog.Warn("[observability] install: failed to build tracer provider, falling back to no-op", "component", "observability", "error", err)
 		otel.SetTracerProvider(noop.NewTracerProvider())
 		tm.enabled = false
 		tm.shutdown = func(context.Context) error { return nil }

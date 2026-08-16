@@ -31,7 +31,7 @@ func (c *SwitchingClient) Enqueue(ctx context.Context, taskType string, payload 
 			// half-attempted via asynq, once via memory) for what the
 			// caller believes was one dispatch. The next relay tick will
 			// re-check health and pick correctly.
-			slog.Warn("queue: asynq enqueue failed despite healthy check, leaving for retry", "error", err, "task_type", taskType)
+			slog.Warn("[queue] Enqueue: asynq enqueue failed despite healthy check, leaving for retry", "component", "queue", "error", err, "task_type", taskType)
 			return err
 		}
 		return nil

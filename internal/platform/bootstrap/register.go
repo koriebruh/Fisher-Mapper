@@ -96,7 +96,7 @@ func RegisterVerifiers(dedup auth.DedupChecker) map[string]auth.Verifier {
 	secretsStore := env.New("")
 	mockSecret := secretsStore.GetSecret("provider_mock_secret")
 	if mockSecret == "" {
-		slog.Warn("provider_mock_secret not configured; POST /webhooks/mock will reject every request (401) until it is set")
+		slog.Warn("[bootstrap] RegisterVerifiers: provider_mock_secret not configured; POST /webhooks/mock will reject every request (401) until it is set", "component", "bootstrap")
 		return map[string]auth.Verifier{}
 	}
 

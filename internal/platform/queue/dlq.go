@@ -38,7 +38,7 @@ func (r *TerminalFailureRecorder) Record(ctx context.Context, taskType, taskID s
 		INSERT INTO terminal_failures (task_type, task_id, payload, error)
 		VALUES ($1, $2, $3, $4)`
 	if _, err := r.pool.Exec(ctx, insertSQL, taskType, taskID, payload, errMsg); err != nil {
-		slog.Error("queue: record terminal failure", "error", err, "task_type", taskType, "task_id", taskID)
+		slog.Error("[queue] Record: record terminal failure", "component", "queue", "error", err, "task_type", taskType, "task_id", taskID)
 	}
 }
 

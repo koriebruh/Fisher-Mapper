@@ -129,7 +129,7 @@ func (m *MemoryClient) Close() error {
 	select {
 	case <-done:
 	case <-time.After(memoryCloseForce):
-		slog.Warn("queue: memory client close timed out waiting for in-flight handlers")
+		slog.Warn("[queue] Close: memory client close timed out waiting for in-flight handlers", "component", "queue")
 	}
 	return nil
 }

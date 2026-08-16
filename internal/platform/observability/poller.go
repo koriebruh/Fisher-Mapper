@@ -65,7 +65,7 @@ func (p *Poller) pollOnce(ctx context.Context) {
 	if p.dlqCount != nil {
 		n, err := p.dlqCount(ctx)
 		if err != nil {
-			slog.Warn("observability: poller: dlq count failed, keeping last value", "error", err)
+			slog.Warn("[observability] pollOnce: dlq count failed, keeping last value", "component", "observability", "error", err)
 			return
 		}
 		p.metrics.TerminalFailuresTotal.Record(ctx, n)
