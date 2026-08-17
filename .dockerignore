@@ -1,0 +1,13 @@
+.git
+.github
+.claude
+bin/
+*.log
+*.out
+*.test
+coverage.out
+gosec-results.sarif
+trivy-results.sarif
+.env
+.env.example
+docs/

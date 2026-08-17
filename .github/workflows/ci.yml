@@ -324,3 +324,66 @@ jobs:
         if: always()
         with:
           sarif_file: gosec-results.sarif
+
+  docker:
+    name: Docker build + trivy scan
+    runs-on: ubuntu-latest
+    needs: lint
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      matrix:
+        target: [server, worker]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3.12.0
+
+      # push: false (this repo isn't set up to push to a registry, that's
+      # out of scope here -- this job only proves the image builds and
+      # passes a vulnerability scan) + load: true so the built image lands
+      # in the local Docker daemon, where trivy's image-ref below can find
+      # it -- push:false alone leaves the image only in the buildx cache,
+      # invisible to `docker`/trivy afterward.
+      - name: Build ${{ matrix.target }} image
+        uses: docker/build-push-action@v6.19.2
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          push: false
+          load: true
+          tags: fisher-mapper-${{ matrix.target }}:ci
+
+      # Two invocations, same shape as gosec's "scan, upload SARIF
+      # unconditionally, then gate": exit-code 1 on the first pass would
+      # skip the SARIF upload entirely (a failed step's later steps still
+      # run without `if: always()`, but the SARIF file itself wouldn't
+      # exist yet if THIS step is what fails). Scan #1 always produces the
+      # report; scan #2 is the strict gate.
+      - name: Trivy scan (report)
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: fisher-mapper-${{ matrix.target }}:ci
+          format: sarif
+          output: trivy-${{ matrix.target }}-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: 0
+
+      - name: Upload trivy SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-${{ matrix.target }}-results.sarif
+          category: trivy-${{ matrix.target }}
+
+      # The real gate: matches gosec's own "-no-fail deliberately not
+      # passed" philosophy -- a real CRITICAL/HIGH vuln fails the job, not
+      # just gets silently recorded in the Security tab for later.
+      - name: Trivy scan (gate)
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: fisher-mapper-${{ matrix.target }}:ci
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: 1
