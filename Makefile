@@ -19,12 +19,19 @@ PROTOC_GEN_GO_GRPC_VERSION  := v1.6.2
 
 # proto regenerates internal/transport/grpc/pb/ from proto/payment/v1/*.proto
 # via buf (github.com/bufbuild/buf -- installable with
-# `go install github.com/bufbuild/buf/cmd/buf@latest`, no protoc binary
-# needed: buf ships its own protobuf compiler). Generated Go stubs ARE
-# committed to the repo (see internal/transport/grpc/pb/ -- not gitignored):
-# not every developer building this template has buf/protoc installed, and
-# gRPC clients/servers need the stubs to compile at all, so "generated but
-# uncommitted" would make a fresh clone fail to build.
+# `go install github.com/bufbuild/buf/cmd/buf@v1.72.0`, no protoc binary
+# needed: buf ships its own protobuf compiler). v1.72.0 is the version CI's
+# proto-sync job pins and this Makefile target was last validated to
+# reproduce a byte-for-byte empty diff against the committed stubs with --
+# buf itself has never been the source of drift here (protoc-gen-go/
+# protoc-gen-go-grpc above are what actually shape the generated Go), but a
+# floating @latest install is exactly the kind of unpinned-tool instability
+# this whole CI setup exists to avoid, so it gets the same treatment.
+# Generated Go stubs ARE committed to the repo (see
+# internal/transport/grpc/pb/ -- not gitignored): not every developer
+# building this template has buf/protoc installed, and gRPC clients/
+# servers need the stubs to compile at all, so "generated but uncommitted"
+# would make a fresh clone fail to build.
 proto:
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@$(PROTOC_GEN_GO_VERSION)
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$(PROTOC_GEN_GO_GRPC_VERSION)

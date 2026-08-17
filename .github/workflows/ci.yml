@@ -164,8 +164,13 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # Pinned (not @latest) for the same reason the Makefile pins
+      # PROTOC_GEN_GO_VERSION/PROTOC_GEN_GO_GRPC_VERSION: this job's whole
+      # point is catching regen drift, so the tool itself can't be a
+      # floating target. v1.72.0 is the version this pipeline was validated
+      # against (`make proto` reproduces a byte-for-byte empty diff).
       - name: Install buf
-        run: go install github.com/bufbuild/buf/cmd/buf@latest
+        run: go install github.com/bufbuild/buf/cmd/buf@v1.72.0
 
       - name: Regenerate proto stubs
         run: make proto
