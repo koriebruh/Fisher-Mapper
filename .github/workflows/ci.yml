@@ -164,6 +164,86 @@ jobs:
       - name: go test ./... -race -p 1 (DB-gated included)
         run: go test ./... -race -p 1 -count=1
 
+  coverage:
+    name: Coverage report + threshold gate
+    runs-on: ubuntu-latest
+    needs: lint
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: fisher
+          POSTGRES_PASSWORD: fisher
+          POSTGRES_DB: fisher_mapper
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fisher -d fisher_mapper"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Same env block as test-integration (and the same reasoning: no
+      # APP_POSTGRES_DSN here -- see that job's comment -- an inherited one
+      # breaks internal/platform/config's TestLoad_TOMLOverlayOverridesDefaults
+      # / TestLoad_EnvOverridesTOML by silently overriding their own
+      # throwaway DSNs).
+      TEST_POSTGRES_DSN: postgres://fisher:fisher@localhost:5432/fisher_mapper?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run migrations
+        run: go run ./cmd/migrate
+
+      # -p 1 for the same reason test-integration uses it: several packages
+      # share tables under TEST_POSTGRES_DSN, and concurrent package test
+      # binaries against that shared DB is a source of cross-package
+      # flakiness. -race is deliberately omitted -- coverage measurement and
+      # race detection are orthogonal concerns, and race mode only slows this
+      # job down for no coverage-accuracy benefit.
+      - name: go test ./... -coverprofile (DB-gated included)
+        run: go test ./... -coverprofile=coverage.out -covermode=atomic -count=1 -p 1
+
+      # Measured actual total on this codebase (all packages, DB-gated tests
+      # included) at the time this gate was added: 40.1%. Threshold is set to
+      # 37% -- a few points below the actual, so the gate has real teeth
+      # against a genuine regression without being a hair-trigger on the
+      # normal +/-1-2% fluctuation a shared-DB integration suite can show
+      # between runs.
+      - name: Enforce coverage threshold
+        run: |
+          COVERAGE_THRESHOLD=37.0
+          total=$(go tool cover -func=coverage.out | tail -1 | awk '{print $NF}' | tr -d '%')
+          echo "Total coverage: ${total}%"
+          echo "Threshold: ${COVERAGE_THRESHOLD}%"
+          awk -v cov="$total" -v thr="$COVERAGE_THRESHOLD" 'BEGIN { exit !(cov < thr) }' && {
+            echo "Coverage ${total}% is below the ${COVERAGE_THRESHOLD}% threshold"
+            exit 1
+          }
+          echo "Coverage ${total}% meets the ${COVERAGE_THRESHOLD}% threshold"
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage.out
+          retention-days: 30
+
   proto-sync:
     name: Proto stubs in sync
     runs-on: ubuntu-latest
