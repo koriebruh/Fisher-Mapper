@@ -146,12 +146,23 @@ func TestClaim_ConcurrentGoroutines(t *testing.T) {
 		return nil
 	}
 
+	// limit is 1000, not 20 (matching this test's own insertRows count),
+	// for the same reason TestClaim_ConcurrentPollersNeverClaimTheSameRow
+	// above uses 1000: this table is shared with internal/domain/payment's
+	// integration tests (see testPool's doc), which under `go test ./...
+	// -p 1` run to completion BEFORE this package's tests start and can
+	// leave dozens of their own pending rows behind. A limit equal to this
+	// test's own row count has no headroom for that -- 4 goroutines x 20
+	// wouldn't cover (this test's 20) + (however many rows payment's suite
+	// left pending), silently starving some of THIS test's own rows of a
+	// claim and failing on a shared, populated database despite the claim/
+	// lock logic itself being entirely correct.
 	var wg sync.WaitGroup
 	for i := 0; i < 4; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _, _, err := store.DispatchBatch(ctx, 20, dispatch)
+			_, _, _, err := store.DispatchBatch(ctx, 1000, dispatch)
 			if err != nil {
 				t.Errorf("DispatchBatch: %v", err)
 			}

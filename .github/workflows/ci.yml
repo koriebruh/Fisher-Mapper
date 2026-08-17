@@ -132,8 +132,20 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
+      # TEST_POSTGRES_DSN only -- APP_POSTGRES_DSN is deliberately NOT set
+      # here. It's redundant (config.toml's [postgres].dsn at the repo root
+      # already matches this service container's user/pass/db/port
+      # exactly, so `go run ./cmd/migrate` below needs no env override at
+      # all) and actively harmful: internal/platform/config's own unit
+      # tests (TestLoad_TOMLOverlayOverridesDefaults,
+      # TestLoad_EnvOverridesTOML) assert specific TOML-vs-env precedence
+      # behavior using their own throwaway DSNs, and an inherited
+      # APP_POSTGRES_DSN in the process environment silently overrides
+      # those, breaking both tests the moment they run in the same job as
+      # this env block (confirmed locally: reproduces even outside CI, any
+      # shell that exports APP_POSTGRES_DSN before `go test ./...` breaks
+      # these two tests the same way).
       TEST_POSTGRES_DSN: postgres://fisher:fisher@localhost:5432/fisher_mapper?sslmode=disable
-      APP_POSTGRES_DSN: postgres://fisher:fisher@localhost:5432/fisher_mapper?sslmode=disable
     steps:
       - uses: actions/checkout@v4
 
