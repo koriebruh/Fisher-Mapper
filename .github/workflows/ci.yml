@@ -205,11 +205,16 @@ jobs:
       # (Code scanning alerts) -- findings stay visible/trackable there
       # across runs, not just in a build log that scrolls away. -no-fail is
       # deliberately NOT passed: strict CI means a real finding fails the
-      # job, not just gets silently recorded for later.
+      # job, not just gets silently recorded for later. -exclude-generated
+      # skips internal/transport/grpc/pb/*.pb.go (protoc-gen-go's own
+      # "Code generated ... DO NOT EDIT." files use unsafe.Slice/
+      # unsafe.StringData internally -- a sanctioned, standard pattern in
+      # generated protobuf code, not something this repo can fix by editing
+      # a file `make proto` would overwrite anyway).
       - name: gosec
         uses: securego/gosec@master
         with:
-          args: -fmt sarif -out gosec-results.sarif ./...
+          args: -exclude-generated -fmt sarif -out gosec-results.sarif ./...
 
       - name: Upload gosec SARIF
         uses: github/codeql-action/upload-sarif@v3

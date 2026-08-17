@@ -220,12 +220,13 @@ type fileConfig struct {
 // defaultPostgresDSN matches docker-compose's throwaway local credentials,
 // not a real secret -- gosec's hardcoded-credential heuristic can't tell the
 // difference from a real password-in-URL. Pulled into its own named
-// constant (rather than nolint'ing the field inline) because gosec's G101
+// constant (rather than suppressing the field inline) because gosec's G101
 // reports the position of the enclosing composite literal, not the string
-// literal itself, so an inline //nolint on the field doesn't line up.
-//
-//nolint:gosec // local dev default, matches docker-compose.yml
-const defaultPostgresDSN = "postgres://fisher:fisher@localhost:5432/fisher_mapper?sslmode=disable"
+// literal itself, so a same-line suppression on the field doesn't line up.
+// #nosec (not //nolint:gosec) because golangci-lint's gosec linter honors
+// the same native directive the standalone `gosec` CLI (CI's separate
+// security job) requires -- one suppression comment works for both.
+const defaultPostgresDSN = "postgres://fisher:fisher@localhost:5432/fisher_mapper?sslmode=disable" //#nosec G101 -- local dev default, matches docker-compose.yml
 
 // defaultBootstrap must be enough on its own for the server to start against
 // a local docker-compose stack with zero external configuration.
@@ -455,7 +456,7 @@ const (
 	EnvCORSAllowMethods     = "APP_CORS_ALLOW_METHODS"
 	EnvCORSAllowHeaders     = "APP_CORS_ALLOW_HEADERS"
 	EnvCORSExposeHeaders    = "APP_CORS_EXPOSE_HEADERS"
-	EnvCORSAllowCredentials = "APP_CORS_ALLOW_CREDENTIALS" //nolint:gosec // env var NAME, not a credential value -- gosec's name-pattern match on "credentials" is a false positive here
+	EnvCORSAllowCredentials = "APP_CORS_ALLOW_CREDENTIALS" //#nosec G101 -- env var NAME, not a credential value: gosec's name-pattern match on "credentials" is a false positive here
 	EnvCORSMaxAgeSeconds    = "APP_CORS_MAX_AGE_SECONDS"
 )
 

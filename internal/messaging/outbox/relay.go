@@ -153,7 +153,7 @@ func (r *Relay) backoff(current time.Duration) time.Duration {
 	if jitterRange <= 0 {
 		return next
 	}
-	delta := rand.Int64N(2*jitterRange) - jitterRange //nolint:gosec // jitter timing only, not security-sensitive -- a predictable PRNG can't be exploited here
+	delta := rand.Int64N(2*jitterRange) - jitterRange //#nosec G404 -- jitter timing only, not security-sensitive: a predictable PRNG can't be exploited here
 	return next + time.Duration(delta)
 }
 

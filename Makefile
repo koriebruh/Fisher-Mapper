@@ -10,8 +10,10 @@ MIGRATE_BIN   := bin/migrate
 # google.golang.org/protobuf and google.golang.org/grpc versions, and must
 # be bumped together with them (see proto/README notes in payment.proto's
 # header comment history / PR description for the pairing: protoc-gen-go
-# v1.36.11 <-> google.golang.org/protobuf v1.36.11, otelgrpc v0.69.0 <->
-# google.golang.org/grpc v1.81.1).
+# v1.36.11 <-> google.golang.org/protobuf v1.36.11, otelgrpc v0.70.0 <->
+# google.golang.org/grpc v1.83.0 -- bumped from v1.81.1 to close GO-2026-6061,
+# an xDS RBAC/HTTP2-transport vulnerability govulncheck found reachable via
+# this codebase's own gRPC server/client call paths).
 PROTOC_GEN_GO_VERSION       := v1.36.11
 PROTOC_GEN_GO_GRPC_VERSION  := v1.6.2
 
