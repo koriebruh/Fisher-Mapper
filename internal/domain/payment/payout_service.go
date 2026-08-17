@@ -231,8 +231,14 @@ func (s *Service) ProcessPayout(ctx context.Context, in PayoutTaskInput) error {
 	})
 	if err != nil {
 		switch apperror.CodeOf(err) {
-		case apperror.CodeInvalidTransition, apperror.CodeTerminalState:
-			// Redelivery of an already-handled payout task.
+		case apperror.CodeInvalidTransition, apperror.CodeTerminalState, apperror.CodeStaleEvent:
+			// Redelivery of an already-handled payout task. CodeStaleEvent
+			// belongs here too (see worker.go's identical fix and comment
+			// for the full mechanism) -- a losing concurrent redelivery's
+			// own EventTS can be earlier than the winner's already-applied
+			// one purely from lock-wait timing, which Transition() reports
+			// as staleness, not invalid-transition, even though it's the
+			// same benign "someone else already won the CAS" case.
 			return nil
 		default:
 			return fmt.Errorf("process payout: transition to processing: %w", err)

@@ -137,10 +137,25 @@ func (s *Service) ProcessCharge(ctx context.Context, in ChargeTaskInput) error {
 	})
 	if err != nil {
 		switch apperror.CodeOf(err) {
-		case apperror.CodeInvalidTransition, apperror.CodeTerminalState:
+		case apperror.CodeInvalidTransition, apperror.CodeTerminalState, apperror.CodeStaleEvent:
 			// Redelivery of an already-handled charge task. The provider
 			// was already called (or is being called right now by the
 			// delivery that won the CAS) — do not call it again.
+			//
+			// CodeStaleEvent belongs in this benign set alongside the other
+			// two (matching reconcile.go's identical 3-way handling): under
+			// concurrent redelivery, EventTS is captured via s.now() before
+			// a goroutine ever waits on the row lock, so a losing
+			// goroutine's own timestamp can easily be earlier than the
+			// winner's already-committed last_event_at once it finally
+			// acquires the lock -- Transition() checks staleness before
+			// checking transition-validity, so this is the SAME "someone
+			// else already won the CAS" outcome as CodeInvalidTransition,
+			// just detected by a different rule first. Treating it as a
+			// real error here (pre-existing bug) surfaced as
+			// intermittent-but-reproducible ProcessCharge redelivery
+			// failures under real concurrency (both locally and on a fresh
+			// CI runner).
 			return nil
 		default:
 			return fmt.Errorf("process charge: transition to processing: %w", err)
