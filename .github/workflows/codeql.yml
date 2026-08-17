@@ -1,0 +1,52 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # CodeQL's own recommended practice: catch newly-disclosed query-pattern
+    # issues surfacing against code that hasn't changed. 06:17 UTC on Mondays
+    # -- an off-the-hour time, not a stampede-prone "on the hour" slot.
+    - cron: "17 6 * * 1"
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: CodeQL analyze (go)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      # Required for private repos' workflow run access when the Action
+      # fetches its own run metadata; harmless no-op on a public repo.
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # v3 is the current major version of the CodeQL action family (init/
+      # autobuild/analyze/upload-sarif all move together) -- pinned to the
+      # exact minor.patch actually validated here, same discipline as every
+      # other tool in this pipeline (golangci-lint-action, gosec, buf).
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3.37.7
+        with:
+          languages: go
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3.37.7
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3.37.7
