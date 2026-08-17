@@ -1,0 +1,45 @@
+# Local git hooks -- catches what CI (.github/workflows/ci.yml) would catch
+# anyway, but before a bad commit/push ever leaves this machine. Mirrors the
+# CI pipeline's own checks so "passes locally" and "passes in CI" mean the
+# same thing; keep the two in sync if either changes.
+#
+# Setup (one-time, per clone): `go install github.com/evilmartians/lefthook@latest`
+# then `lefthook install`. Skippable per-commit with `git commit --no-verify`
+# (still enforced server-side by CI either way).
+
+pre-commit:
+  parallel: true
+  commands:
+    gofmt:
+      glob: "*.go"
+      run: |
+        out=$(gofmt -l {staged_files})
+        if [ -n "$out" ]; then
+          echo "not gofmt-formatted:"; echo "$out"; exit 1
+        fi
+    go-vet:
+      glob: "*.go"
+      run: go vet ./...
+    golangci-lint:
+      glob: "*.go"
+      # --new-from-rev=HEAD: lints only what this commit actually changes,
+      # not the whole repo -- keeps pre-commit fast. CI's own golangci-lint
+      # job (no --new-from-rev) is the full-repo authority; this is a
+      # local speed/coverage tradeoff, not a weaker standard.
+      run: golangci-lint run --new-from-rev=HEAD --timeout=3m
+
+pre-push:
+  commands:
+    go-build:
+      run: go build ./...
+    go-test:
+      run: go test ./... -race -count=1
+    go-mod-tidy:
+      glob: "go.{mod,sum}"
+      run: |
+        cp go.mod /tmp/go.mod.lefthook-check
+        cp go.sum /tmp/go.sum.lefthook-check
+        go mod tidy
+        diff -q /tmp/go.mod.lefthook-check go.mod && diff -q /tmp/go.sum.lefthook-check go.sum || {
+          echo "go.mod/go.sum drifted from 'go mod tidy' -- commit the tidied result"; exit 1
+        }

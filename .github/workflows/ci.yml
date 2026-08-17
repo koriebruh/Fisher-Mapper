@@ -218,20 +218,26 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
 
-      # gosec's own SARIF output is uploaded to the repo's Security tab
-      # (Code scanning alerts) -- findings stay visible/trackable there
-      # across runs, not just in a build log that scrolls away. -no-fail is
-      # deliberately NOT passed: strict CI means a real finding fails the
-      # job, not just gets silently recorded for later. -exclude-generated
-      # skips internal/transport/grpc/pb/*.pb.go (protoc-gen-go's own
-      # "Code generated ... DO NOT EDIT." files use unsafe.Slice/
-      # unsafe.StringData internally -- a sanctioned, standard pattern in
-      # generated protobuf code, not something this repo can fix by editing
-      # a file `make proto` would overwrite anyway).
+      # A native `go install` + run, not the securego/gosec Docker action:
+      # that action (pinned to the floating @master ref, itself a red flag)
+      # was observed dying silently mid-scan on the real runner -- the job
+      # log cuts off right after the import phase, before a single "Checking
+      # file" line, the signature of a container OOM-kill, not a real
+      # finding (confirmed by running the same scan natively: 0 issues
+      # across all 72 files). Pinned to v2.28.0 for the same reproducibility
+      # reason every other tool in this pipeline is pinned.
+      #
+      # -no-fail is deliberately NOT passed: strict CI means a real finding
+      # fails the job, not just gets silently recorded for later.
+      # -exclude-generated skips internal/transport/grpc/pb/*.pb.go
+      # (protoc-gen-go's own "Code generated ... DO NOT EDIT." files use
+      # unsafe.Slice/unsafe.StringData internally -- a sanctioned, standard
+      # pattern in generated protobuf code, not something this repo can fix
+      # by editing a file `make proto` would overwrite anyway).
       - name: gosec
-        uses: securego/gosec@master
-        with:
-          args: -exclude-generated -fmt sarif -out gosec-results.sarif ./...
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
+          gosec -exclude-generated -fmt sarif -out gosec-results.sarif ./...
 
       - name: Upload gosec SARIF
         uses: github/codeql-action/upload-sarif@v3
