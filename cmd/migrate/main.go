@@ -72,12 +72,16 @@ func run(ctx context.Context, logger *slog.Logger, down bool, createTenantKey st
 		// credential to the operator's terminal -- see tenantauth.CreateKey's
 		// own doc comment: there is no other channel to retrieve the
 		// plaintext key, and -create-tenant-key's entire purpose is showing
-		// it once so an operator can copy it out. CodeQL's go/clear-text-
-		// logging flags this generically (fmt.Println of "sensitive" data);
-		// the real mitigation here is operational, not code-level -- don't
-		// run this flag in a context where stdout gets captured by a
-		// persistent log (CI output, systemd journal, etc).
-		// codeql[go/clear-text-logging]
+		// it once so an operator can copy it out. CodeQL flags this as
+		// go/clear-text-logging (fmt.Println of "sensitive" data); that
+		// alert is dismissed on GitHub as accepted-by-design (see the code
+		// scanning alert's dismissal comment) -- an inline `codeql[...]`
+		// comment does NOT suppress code-scanning alerts on GitHub (that's a
+		// CodeQL-CLI-only feature), so the dismissal itself, not this
+		// comment, is what's load-bearing. The real mitigation here is
+		// operational, not code-level -- don't run this flag in a context
+		// where stdout gets captured by a persistent log (CI output, systemd
+		// journal, etc).
 		fmt.Println(apiKey)
 		return nil
 	}
