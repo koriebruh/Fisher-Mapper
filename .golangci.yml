@@ -1,0 +1,80 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    # Resource-leak / correctness linters -- high value for a codebase that
+    # opens pgx transactions, HTTP response bodies, and asynq/Redis
+    # connections on nearly every request path.
+    - bodyclose
+    - sqlclosecheck
+    - rowserrcheck
+    - noctx
+    # Error-handling correctness -- this codebase leans on apperror.Wrap/
+    # errors.Is/errors.As throughout; errorlint catches the common mistakes
+    # (== comparison instead of errors.Is, %s instead of %w, etc).
+    - errorlint
+    - nilerr
+    # Security.
+    - gosec
+    # Enum-exhaustiveness -- payment.Status/OperationType are closed enums
+    # with money-safety implications if a switch silently falls through on
+    # a new member.
+    - exhaustive
+    # General code-quality.
+    - unconvert
+    - unparam
+    - misspell
+    - gocritic
+    - revive
+    - prealloc
+    - goconst
+  exclusions:
+    # "comments" (the stock preset) turns off revive/stylecheck's "exported
+    # symbol needs a doc comment" rule. This repo's own comment-style rule
+    # (see MEMORY.md: strip WHAT-comments, keep only non-obvious WHY-comments)
+    # is incompatible with mechanically adding a one-line restatement-of-the-
+    # name comment to every exported identifier just to satisfy the linter --
+    # that's the exact noise the house style forbids. revive still runs every
+    # other rule (unused-parameter, etc).
+    presets:
+      - comments
+    rules:
+      # Table-driven test files intentionally repeat literals (test case
+      # names, expected values) -- goconst on test data is noise, not signal.
+      # noctx: test helpers dialing loopback/httptest don't need
+      # cancellation-aware constructors -- rewriting them to *WithContext
+      # variants is churn with no correctness benefit in a test binary that
+      # already exits at test end.
+      - path: _test\.go
+        linters:
+          - goconst
+          - unparam
+          - noctx
+      # currency.go's ISO-4217 set and redact.go's sensitive-key set are
+      # data tables, not accidental repetition -- each entry is meaningful on
+      # its own, so a shared constant would just rename a literal without
+      # removing any duplication risk.
+      - path: internal/domain/payment/currency\.go
+        linters:
+          - goconst
+      - path: internal/platform/observability/redact\.go
+        linters:
+          - goconst
+  settings:
+    exhaustive:
+      default-signifies-exhaustive: true
+    gosec:
+      # G104 (unchecked error) is already covered by errcheck (a default
+      # linter) with better context; keeping both active just duplicates
+      # findings under two different linter names.
+      excludes:
+        - G104
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

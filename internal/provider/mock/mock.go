@@ -20,6 +20,15 @@ import (
 	"Fisher-Mapper/internal/provider/payload"
 )
 
+// keyProviderRef is the RawResponse map key every non-refund
+// Authorize/Capture/Charge/GetStatus/Payout response echoes the provider
+// reference under -- kept as one constant so all five agree on spelling.
+const keyProviderRef = "provider_ref"
+
+// keyStatus is the RawResponse map key every response echoes m.cfg.Status
+// under.
+const keyStatus = "status"
+
 type Config struct {
 	// Name is the registry key this instance answers to.
 	Name string
@@ -200,7 +209,7 @@ func (m *Mock) Authorize(ctx context.Context, req provider.AuthorizeRequest) (pr
 	return provider.AuthorizeResponse{
 		ProviderRef: ref,
 		Status:      m.cfg.Status,
-		RawResponse: rawResponse(map[string]any{"provider_ref": ref, "status": m.cfg.Status}),
+		RawResponse: rawResponse(map[string]any{keyProviderRef: ref, keyStatus: m.cfg.Status}),
 	}, nil
 }
 
@@ -219,7 +228,7 @@ func (m *Mock) Capture(ctx context.Context, req provider.CaptureRequest) (provid
 	return provider.CaptureResponse{
 		ProviderRef: req.ProviderRef,
 		Status:      m.cfg.Status,
-		RawResponse: rawResponse(map[string]any{"provider_ref": req.ProviderRef, "status": m.cfg.Status}),
+		RawResponse: rawResponse(map[string]any{keyProviderRef: req.ProviderRef, keyStatus: m.cfg.Status}),
 	}, nil
 }
 
@@ -242,7 +251,7 @@ func (m *Mock) Charge(ctx context.Context, req provider.ChargeRequest) (provider
 	return provider.ChargeResponse{
 		ProviderRef:   ref,
 		Status:        m.cfg.Status,
-		RawResponse:   rawResponse(map[string]any{"provider_ref": ref, "status": m.cfg.Status}),
+		RawResponse:   rawResponse(map[string]any{keyProviderRef: ref, keyStatus: m.cfg.Status}),
 		MethodPayload: methodPayloadFor(req.PaymentMethod, ref, time.Now().UTC()),
 	}, nil
 }
@@ -273,7 +282,7 @@ func (m *Mock) GetStatus(ctx context.Context, req provider.GetStatusRequest) (pr
 		Status:      m.cfg.Status,
 		Amount:      amount,
 		Currency:    currency,
-		RawResponse: rawResponse(map[string]any{"provider_ref": req.ProviderRef, "status": m.cfg.Status}),
+		RawResponse: rawResponse(map[string]any{keyProviderRef: req.ProviderRef, keyStatus: m.cfg.Status}),
 	}, nil
 }
 
@@ -300,7 +309,7 @@ func (m *Mock) Refund(ctx context.Context, req provider.RefundRequest) (provider
 	return provider.RefundResponse{
 		ProviderRefundRef: ref,
 		Status:            m.cfg.Status,
-		RawResponse:       rawResponse(map[string]any{"provider_refund_ref": ref, "status": m.cfg.Status}),
+		RawResponse:       rawResponse(map[string]any{"provider_refund_ref": ref, keyStatus: m.cfg.Status}),
 	}, nil
 }
 
@@ -323,7 +332,7 @@ func (m *Mock) Payout(ctx context.Context, req provider.PayoutRequest) (provider
 	return provider.PayoutResponse{
 		ProviderRef: ref,
 		Status:      m.cfg.Status,
-		RawResponse: rawResponse(map[string]any{"provider_ref": ref, "status": m.cfg.Status}),
+		RawResponse: rawResponse(map[string]any{keyProviderRef: ref, keyStatus: m.cfg.Status}),
 	}, nil
 }
 

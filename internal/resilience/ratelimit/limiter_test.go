@@ -66,12 +66,11 @@ func newTestApp(l *Limiter, enabled func() bool) *fiber.App {
 func TestMiddleware_EnabledTrueRejectsBeyondBurst(t *testing.T) {
 	app := newTestApp(New(1, 1), func() bool { return true })
 
-	if resp := doGet(t, app); resp.StatusCode != http.StatusOK {
-		t.Fatalf("first request status = %d, want 200", resp.StatusCode)
+	if status := doGet(t, app); status != http.StatusOK {
+		t.Fatalf("first request status = %d, want 200", status)
 	}
-	resp := doGet(t, app)
-	if resp.StatusCode != http.StatusTooManyRequests {
-		t.Errorf("second request status = %d, want 429 (enabled=true, burst exhausted)", resp.StatusCode)
+	if status := doGet(t, app); status != http.StatusTooManyRequests {
+		t.Errorf("second request status = %d, want 429 (enabled=true, burst exhausted)", status)
 	}
 }
 
@@ -83,19 +82,22 @@ func TestMiddleware_EnabledFalseBypassesLimiter(t *testing.T) {
 	app := newTestApp(New(1, 1), func() bool { return false })
 
 	for i := 0; i < 3; i++ {
-		resp := doGet(t, app)
-		if resp.StatusCode != http.StatusOK {
-			t.Errorf("request %d status = %d, want 200 (ratelimit disabled)", i, resp.StatusCode)
+		status := doGet(t, app)
+		if status != http.StatusOK {
+			t.Errorf("request %d status = %d, want 200 (ratelimit disabled)", i, status)
 		}
 	}
 }
 
-func doGet(t *testing.T, app *fiber.App) *http.Response {
+// doGet returns only the status code (closing the response body itself)
+// since every caller here cares about the status alone, never the body.
+func doGet(t *testing.T, app *fiber.App) int {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	resp, err := app.Test(req)
 	if err != nil {
 		t.Fatalf("app.Test: %v", err)
 	}
-	return resp
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode
 }

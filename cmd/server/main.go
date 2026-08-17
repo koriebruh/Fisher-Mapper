@@ -61,13 +61,13 @@ import (
 // dynamic-config refresh interval and metrics poll interval.
 
 func main() {
-	if err := run_(); err != nil {
+	if err := runServer(); err != nil {
 		slog.Error("[server] main: server exited with error", "component", "server", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run_() error {
+func runServer() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -266,7 +266,7 @@ func run_() error {
 	// is bound here, before g.Run(), so a bad port fails startup loudly
 	// instead of only surfacing once the run.Group actor's execute() runs.
 	grpcAddr := fmt.Sprintf(":%d", cfg.GRPC.Port)
-	grpcListener, err := net.Listen("tcp", grpcAddr)
+	grpcListener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", grpcAddr)
 	if err != nil {
 		return fmt.Errorf("listen grpc %s: %w", grpcAddr, err)
 	}

@@ -1,0 +1,218 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A new push to the same PR/branch cancels the previous run -- no point
+# burning runner minutes on a commit that's already superseded.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Every job resolves the Go toolchain version from go.mod (go-version-file
+  # below) instead of a hardcoded version here -- one source of truth,
+  # bumping go.mod's `go` directive is enough to move CI too.
+  GOFLAGS: -mod=readonly
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go mod tidy (no drift)
+        run: |
+          cp go.mod go.mod.orig
+          cp go.sum go.sum.orig
+          go mod tidy
+          diff -u go.mod.orig go.mod || { echo "go.mod is out of date -- run 'go mod tidy' and commit the result"; exit 1; }
+          diff -u go.sum.orig go.sum || { echo "go.sum is out of date -- run 'go mod tidy' and commit the result"; exit 1; }
+
+      # golangci-lint-action v6 only drives golangci-lint v1 -- .golangci.yml
+      # uses the v2 config schema (version: "2", separate formatters: block),
+      # which a v1 binary rejects outright. v7+ of the action is the v2-only
+      # generation. version is pinned to the exact release validated locally
+      # (not "latest") for the same reason the Makefile pins
+      # PROTOC_GEN_GO_VERSION/PROTOC_GEN_GO_GRPC_VERSION: a floating version
+      # here would make this job's pass/fail depend on whatever golangci-lint
+      # released today, not on the config actually developed against.
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          args: --timeout=5m
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build all binaries
+        run: |
+          go build -o bin/server ./cmd/server
+          go build -o bin/worker ./cmd/worker
+          go build -o bin/migrate ./cmd/migrate
+
+  test:
+    name: Unit tests (race)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # TEST_POSTGRES_DSN is deliberately unset here -- DB-gated integration
+      # tests self-skip (see internal test files' own gating), leaving only
+      # the pure-unit suite. The DB-backed half runs in test-integration
+      # below, against real services, not mocked.
+      - name: go test ./... -race
+        run: go test ./... -race -count=1
+
+  test-integration:
+    name: Integration tests (Postgres + Redis)
+    runs-on: ubuntu-latest
+    needs: lint
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: fisher
+          POSTGRES_PASSWORD: fisher
+          POSTGRES_DB: fisher_mapper
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fisher -d fisher_mapper"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_POSTGRES_DSN: postgres://fisher:fisher@localhost:5432/fisher_mapper?sslmode=disable
+      APP_POSTGRES_DSN: postgres://fisher:fisher@localhost:5432/fisher_mapper?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run migrations
+        run: go run ./cmd/migrate
+
+      # -p 1: several packages share the same Postgres tables under
+      # TEST_POSTGRES_DSN (see Makefile's test-db target) -- running their
+      # test binaries as concurrent OS processes is a source of
+      # cross-package flakiness on shared DB state that -p 1 removes.
+      - name: go test ./... -race -p 1 (DB-gated included)
+        run: go test ./... -race -p 1 -count=1
+
+  proto-sync:
+    name: Proto stubs in sync
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install buf
+        run: go install github.com/bufbuild/buf/cmd/buf@latest
+
+      - name: Regenerate proto stubs
+        run: make proto
+
+      - name: Fail if regeneration produced a diff
+        run: |
+          if ! git diff --quiet -- internal/transport/grpc/pb; then
+            echo "Committed generated proto stubs are out of sync with proto/*.proto -- run 'make proto' and commit the result"
+            git diff --stat -- internal/transport/grpc/pb
+            exit 1
+          fi
+
+  security:
+    name: Security scan
+    runs-on: ubuntu-latest
+    needs: lint
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # govulncheck traces the actual call graph, not just "a CVE exists
+      # somewhere in a dependency you happen to import" -- far fewer
+      # irrelevant-to-you false positives than a manifest-only scanner.
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      # gosec's own SARIF output is uploaded to the repo's Security tab
+      # (Code scanning alerts) -- findings stay visible/trackable there
+      # across runs, not just in a build log that scrolls away. -no-fail is
+      # deliberately NOT passed: strict CI means a real finding fails the
+      # job, not just gets silently recorded for later.
+      - name: gosec
+        uses: securego/gosec@master
+        with:
+          args: -fmt sarif -out gosec-results.sarif ./...
+
+      - name: Upload gosec SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: gosec-results.sarif

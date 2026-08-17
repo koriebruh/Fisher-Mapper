@@ -131,7 +131,7 @@ func (s *Service) ProcessCharge(ctx context.Context, in ChargeTaskInput) error {
 		PaymentID:   in.PaymentID,
 		To:          StatusProcessing,
 		EventTS:     s.now(),
-		EventType:   "processing_started",
+		EventType:   outboxEventProcessingStarted,
 		Provider:    in.Provider,
 		InitiatedBy: InitiatedBySystem,
 	})

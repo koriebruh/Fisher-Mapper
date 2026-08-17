@@ -54,6 +54,12 @@ const (
 	ScopePayout = "payout"
 )
 
+// StatusCompleted is the idempotency_keys.status value Complete writes and
+// Reserve/Get compare against. Exported so callers polling Get's result
+// (service.go, payout_service.go, refund_service.go) compare against the
+// same constant instead of repeating the raw string.
+const StatusCompleted = "completed"
+
 type Record struct {
 	TenantID           string
 	Scope              string
@@ -124,7 +130,7 @@ func (s *PGStore) Reserve(ctx context.Context, tenantID, scope, key, fingerprint
 	if rec.FingerprintHash != fingerprintHash {
 		return ReserveResult{State: StateConflict, Record: rec}, nil
 	}
-	if rec.Status == "completed" {
+	if rec.Status == StatusCompleted {
 		return ReserveResult{State: StateCompleted, Record: rec}, nil
 	}
 	return ReserveResult{State: StateInProgress, Record: rec}, nil

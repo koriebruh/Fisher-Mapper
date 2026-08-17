@@ -80,12 +80,12 @@ func TestSafeDialer_RefusesLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	dialer := SafeDialer(2 * time.Second)
 	conn, err := dialer.DialContext(context.Background(), "tcp", ln.Addr().String())
 	if err == nil {
-		conn.Close()
+		_ = conn.Close()
 		t.Fatal("DialContext to loopback listener succeeded, want refused")
 	}
 }

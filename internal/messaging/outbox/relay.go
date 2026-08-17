@@ -121,13 +121,14 @@ func (r *Relay) Run(ctx context.Context) error {
 		}
 
 		claimed, dispatched, failed, err := r.store.DispatchBatch(ctx, r.batchSize, r.dispatchOne)
-		if err != nil {
+		switch {
+		case err != nil:
 			slog.Error("[outbox] Run: dispatch batch", "component", "outbox", "error", err)
 			interval = r.backoff(interval)
-		} else if failed > 0 {
+		case failed > 0:
 			slog.Warn("[outbox] Run: some rows failed to dispatch, will retry", "component", "outbox", "claimed", claimed, "dispatched", dispatched, "failed", failed)
 			interval = r.backoff(interval)
-		} else {
+		default:
 			if claimed > 0 {
 				slog.Debug("[outbox] Run: dispatched batch", "component", "outbox", "claimed", claimed, "dispatched", dispatched)
 			}
@@ -152,7 +153,7 @@ func (r *Relay) backoff(current time.Duration) time.Duration {
 	if jitterRange <= 0 {
 		return next
 	}
-	delta := rand.Int64N(2*jitterRange) - jitterRange
+	delta := rand.Int64N(2*jitterRange) - jitterRange //nolint:gosec // jitter timing only, not security-sensitive -- a predictable PRNG can't be exploited here
 	return next + time.Duration(delta)
 }
 

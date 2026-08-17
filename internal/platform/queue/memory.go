@@ -69,7 +69,7 @@ func (m *MemoryClient) RegisterHandler(taskType string, h Handler) {
 	m.handlers[taskType] = h
 }
 
-func (m *MemoryClient) Enqueue(ctx context.Context, taskType string, payload []byte, opts EnqueueOptions) error {
+func (m *MemoryClient) Enqueue(_ context.Context, taskType string, payload []byte, opts EnqueueOptions) error {
 	m.mu.RLock()
 	h, ok := m.handlers[taskType]
 	closed := m.closed

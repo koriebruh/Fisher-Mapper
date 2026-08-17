@@ -53,13 +53,13 @@ import (
 // flip live, it's process tuning consumed once at startup.
 
 func main() {
-	if err := run_(); err != nil {
+	if err := runWorker(); err != nil {
 		slog.Error("[worker] main: worker exited with error", "component", "worker", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run_() error {
+func runWorker() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -325,7 +325,11 @@ func run_() error {
 	if promRegistry != nil {
 		metricsMux := http.NewServeMux()
 		metricsMux.Handle("/metrics", promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{}))
-		metricsSrv := &http.Server{Addr: ":" + cfg.Worker.MetricsPort, Handler: metricsMux}
+		metricsSrv := &http.Server{
+			Addr:              ":" + cfg.Worker.MetricsPort,
+			Handler:           metricsMux,
+			ReadHeaderTimeout: 5 * time.Second,
+		}
 		metricsExecute, metricsInterrupt := lifecycle.HTTPServerActor(metricsSrv, 5*time.Second)
 		g.Add(metricsExecute, metricsInterrupt)
 		logger.Info("worker metrics endpoint listening", "addr", metricsSrv.Addr)
@@ -364,7 +368,7 @@ var callbackHTTPClient = &http.Client{
 	Transport: &http.Transport{
 		DialContext: ssrf.SafeDialer(5 * time.Second).DialContext,
 	},
-	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+	CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 		return http.ErrUseLastResponse
 	},
 }
@@ -394,7 +398,7 @@ func httpCallbackNotifier(ctx context.Context, url string, payload payment.Callb
 		slog.Warn("[worker] httpCallbackNotifier: delivery failed", "component", "worker", "url", url, "error", err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		slog.Warn("[worker] httpCallbackNotifier: non-2xx response", "component", "worker", "url", url, "status", resp.StatusCode)

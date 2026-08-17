@@ -225,7 +225,7 @@ func (s *Service) ProcessRefund(ctx context.Context, in RefundTaskInput) error {
 		RefundID:    in.RefundID,
 		To:          StatusProcessing,
 		EventTS:     s.now(),
-		EventType:   "processing_started",
+		EventType:   outboxEventProcessingStarted,
 		Provider:    in.Provider,
 		InitiatedBy: InitiatedBySystem,
 	})
@@ -344,7 +344,7 @@ func (s *Service) pollForRefundCompletion(ctx context.Context, tenantID, key str
 		if err != nil {
 			continue
 		}
-		if rec.Status == "completed" {
+		if rec.Status == idempotency.StatusCompleted {
 			out, err := decodeStoredRefundResponse(rec.ResponseBody)
 			if err != nil {
 				return CreateRefundOutput{}, false

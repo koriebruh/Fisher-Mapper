@@ -30,6 +30,12 @@ const (
 	OperationReversal  OperationType = "reversal"
 )
 
+// outboxEventProcessingStarted is the outbox EventType emitted the moment a
+// charge/refund/payout enters provider-call processing, before the terminal
+// succeeded/failed event -- shared by worker.go, refund_service.go and
+// payout_service.go so all three emit the identical string.
+const outboxEventProcessingStarted = "processing_started"
+
 // Envelope carries the request/actor metadata a real financial transaction
 // record needs beyond the money invariants themselves -- embedded
 // (anonymously) into Payment/Refund/Payout so all three operation types

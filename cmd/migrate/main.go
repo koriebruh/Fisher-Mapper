@@ -36,18 +36,24 @@ func main() {
 	// env var overlay step runs.
 	config.LoadDotEnv()
 
-	ctx := context.Background()
+	// run() owns every defer (pool.Close, sqlDB.Close) so os.Exit -- which
+	// skips deferred calls -- only ever happens here, after they've already
+	// run.
+	if err := run(context.Background(), logger, *down, *createTenantKey); err != nil {
+		logger.Error(err.Error())
+		os.Exit(1)
+	}
+}
 
+func run(ctx context.Context, logger *slog.Logger, down bool, createTenantKey string) error {
 	cfg, err := config.Load(configPath())
 	if err != nil {
-		logger.Error("load bootstrap config", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("load bootstrap config: %w", err)
 	}
 
 	pool, err := db.NewPool(ctx, cfg.Postgres.DSN)
 	if err != nil {
-		logger.Error("connect postgres", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("connect postgres: %w", err)
 	}
 	defer pool.Close()
 
@@ -57,34 +63,36 @@ func main() {
 	// applied yet (it does need that table to exist, but this flag's whole
 	// point is being invoked as its own separate operator step, same as
 	// -down).
-	if *createTenantKey != "" {
-		apiKey, err := tenantauth.NewStore(pool).CreateKey(ctx, *createTenantKey)
+	if createTenantKey != "" {
+		apiKey, err := tenantauth.NewStore(pool).CreateKey(ctx, createTenantKey)
 		if err != nil {
-			logger.Error("create tenant key", "error", err)
-			os.Exit(1)
+			return fmt.Errorf("create tenant key: %w", err)
 		}
 		fmt.Println(apiKey)
-		return
+		return nil
 	}
 
 	sqlDB := db.NewMigrationHandle(pool)
-	defer sqlDB.Close()
+	defer func() {
+		if cerr := sqlDB.Close(); cerr != nil {
+			logger.Warn("close migration handle", "error", cerr)
+		}
+	}()
 
-	if *down {
+	if down {
 		if err := db.RollbackLastMigration(ctx, sqlDB, migrationsDir); err != nil {
-			logger.Error("rollback migration", "error", err)
-			os.Exit(1)
+			return fmt.Errorf("rollback migration: %w", err)
 		}
 		logger.Info("last migration rolled back")
-		return
+		return nil
 	}
 
 	if err := db.RunMigrations(ctx, sqlDB, migrationsDir); err != nil {
-		logger.Error("run migrations", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("run migrations: %w", err)
 	}
 
 	logger.Info("migrations applied")
+	return nil
 }
 
 func configPath() string {

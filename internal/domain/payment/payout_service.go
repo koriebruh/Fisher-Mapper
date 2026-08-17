@@ -225,7 +225,7 @@ func (s *Service) ProcessPayout(ctx context.Context, in PayoutTaskInput) error {
 		PayoutID:    in.PayoutID,
 		To:          StatusProcessing,
 		EventTS:     s.now(),
-		EventType:   "processing_started",
+		EventType:   outboxEventProcessingStarted,
 		Provider:    in.Provider,
 		InitiatedBy: InitiatedBySystem,
 	})
@@ -365,7 +365,7 @@ func (s *Service) pollForPayoutCompletion(ctx context.Context, tenantID, key str
 		if err != nil {
 			continue
 		}
-		if rec.Status == "completed" {
+		if rec.Status == idempotency.StatusCompleted {
 			out, err := decodeStoredPayoutResponse(rec.ResponseBody)
 			if err != nil {
 				return CreatePayoutOutput{}, false

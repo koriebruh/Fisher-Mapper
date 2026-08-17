@@ -38,7 +38,7 @@ import (
 // dynamic-config ratelimit.enabled toggle can flip behavior without a
 // redeploy; nil means "always enabled".
 func RateLimitInterceptor(l *ratelimit.Limiter, enabled func() bool) grpc.UnaryServerInterceptor {
-	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if enabled != nil && !enabled() {
 			return handler(ctx, req)
 		}

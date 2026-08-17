@@ -71,7 +71,7 @@ func CheckHost(ctx context.Context, host string) error {
 func SafeDialer(timeout time.Duration) *net.Dialer {
 	return &net.Dialer{
 		Timeout: timeout,
-		Control: func(network, address string, _ syscall.RawConn) error {
+		Control: func(_, address string, _ syscall.RawConn) error {
 			host, _, err := net.SplitHostPort(address)
 			if err != nil {
 				return fmt.Errorf("ssrf: parse dial address %q: %w", address, err)

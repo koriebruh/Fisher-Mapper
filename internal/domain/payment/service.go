@@ -496,7 +496,7 @@ func (s *Service) pollForCompletion(ctx context.Context, tenantID, scope, key st
 		if err != nil {
 			continue
 		}
-		if rec.Status == "completed" {
+		if rec.Status == idempotency.StatusCompleted {
 			out, err := decodeStoredResponse(rec.ResponseBody)
 			if err != nil {
 				return CreatePaymentOutput{}, false

@@ -91,8 +91,12 @@ func newTenant(ctx context.Context, t *testing.T, store *tenantauth.Store) (tena
 }
 
 // doRequest is a small fluent helper over fiber's app.Test, shared by every
-// test below.
-func doRequest(t *testing.T, app *fiber.App, method, path, apiKey, idempotencyKey string, body any) (*http.Response, []byte) {
+// test below. Returns the status code and the fully-read body rather than
+// the raw *http.Response -- no caller here needs anything else off the
+// response, and returning the response only for its StatusCode would leave
+// its Body's lifetime (and closing it) the caller's problem instead of this
+// helper's.
+func doRequest(t *testing.T, app *fiber.App, method, path, apiKey, idempotencyKey string, body any) (status int, respBody []byte) {
 	t.Helper()
 	var reader io.Reader
 	if body != nil {
@@ -118,20 +122,21 @@ func doRequest(t *testing.T, app *fiber.App, method, path, apiKey, idempotencyKe
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, path, err)
 	}
-	respBody, err := io.ReadAll(resp.Body)
+	defer func() { _ = resp.Body.Close() }()
+	respBody, err = io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("read response body: %v", err)
 	}
-	return resp, respBody
+	return resp.StatusCode, respBody
 }
 
 func TestREST_TenantAuth_MissingAPIKey_Unauthorized(t *testing.T) {
 	pool := testPool(t)
 	app, _ := newTestAppAndStore(t, pool)
 
-	resp, _ := doRequest(t, app, http.MethodGet, "/payments/"+uuid.NewString(), "", "", nil)
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("GetPayment with no X-Api-Key: status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	status, _ := doRequest(t, app, http.MethodGet, "/payments/"+uuid.NewString(), "", "", nil)
+	if status != http.StatusUnauthorized {
+		t.Fatalf("GetPayment with no X-Api-Key: status = %d, want %d", status, http.StatusUnauthorized)
 	}
 }
 
@@ -139,9 +144,9 @@ func TestREST_TenantAuth_InvalidAPIKey_Unauthorized(t *testing.T) {
 	pool := testPool(t)
 	app, _ := newTestAppAndStore(t, pool)
 
-	resp, _ := doRequest(t, app, http.MethodGet, "/payments/"+uuid.NewString(), "not-a-real-key-"+uuid.NewString(), "", nil)
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("GetPayment with an unknown X-Api-Key: status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	status, _ := doRequest(t, app, http.MethodGet, "/payments/"+uuid.NewString(), "not-a-real-key-"+uuid.NewString(), "", nil)
+	if status != http.StatusUnauthorized {
+		t.Fatalf("GetPayment with an unknown X-Api-Key: status = %d, want %d", status, http.StatusUnauthorized)
 	}
 }
 
@@ -160,9 +165,9 @@ func TestREST_TenantIsolation_CrossTenantGetPayment_NotFound(t *testing.T) {
 	_, tenant2Key := newTenant(ctx, t, tenantStore)
 
 	createBody := map[string]any{"currency": "USD", "amount": 1234, "provider": "mock"}
-	resp, body := doRequest(t, app, http.MethodPost, "/payments", tenant1Key, uuid.NewString(), createBody)
-	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("CreatePayment (tenant1): status = %d, body = %s", resp.StatusCode, body)
+	status, body := doRequest(t, app, http.MethodPost, "/payments", tenant1Key, uuid.NewString(), createBody)
+	if status != http.StatusAccepted {
+		t.Fatalf("CreatePayment (tenant1): status = %d, body = %s", status, body)
 	}
 	var created struct {
 		PaymentID string `json:"payment_id"`
@@ -172,17 +177,17 @@ func TestREST_TenantIsolation_CrossTenantGetPayment_NotFound(t *testing.T) {
 	}
 
 	// Owner reads its own payment: succeeds.
-	resp, body = doRequest(t, app, http.MethodGet, "/payments/"+created.PaymentID, tenant1Key, "", nil)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GetPayment as owning tenant: status = %d, body = %s", resp.StatusCode, body)
+	status, body = doRequest(t, app, http.MethodGet, "/payments/"+created.PaymentID, tenant1Key, "", nil)
+	if status != http.StatusOK {
+		t.Fatalf("GetPayment as owning tenant: status = %d, body = %s", status, body)
 	}
 
 	// A DIFFERENT tenant, with its own genuinely valid API key, tries the
 	// SAME payment id: must be 404, never the row (DATA LEAK if not).
-	resp, body = doRequest(t, app, http.MethodGet, "/payments/"+created.PaymentID, tenant2Key, "", nil)
-	if resp.StatusCode != http.StatusNotFound {
+	status, body = doRequest(t, app, http.MethodGet, "/payments/"+created.PaymentID, tenant2Key, "", nil)
+	if status != http.StatusNotFound {
 		t.Fatalf("GetPayment for another tenant's payment id: status = %d, body = %s, want %d (not-found, not a leaked row)",
-			resp.StatusCode, body, http.StatusNotFound)
+			status, body, http.StatusNotFound)
 	}
 }
 
@@ -209,9 +214,9 @@ func TestREST_TenantIsolation_CreatePayment_UsesAuthenticatedTenant_NotSpoofable
 		"provider":  "mock",
 		"tenant_id": "attacker-controlled-tenant",
 	}
-	resp, body := doRequest(t, app, http.MethodPost, "/payments", tenant2Key, uuid.NewString(), createBody)
-	if resp.StatusCode != http.StatusAccepted {
-		t.Fatalf("CreatePayment (tenant2, with a spoofing tenant_id field): status = %d, body = %s", resp.StatusCode, body)
+	status, body := doRequest(t, app, http.MethodPost, "/payments", tenant2Key, uuid.NewString(), createBody)
+	if status != http.StatusAccepted {
+		t.Fatalf("CreatePayment (tenant2, with a spoofing tenant_id field): status = %d, body = %s", status, body)
 	}
 	var created struct {
 		PaymentID string `json:"payment_id"`
@@ -222,17 +227,17 @@ func TestREST_TenantIsolation_CreatePayment_UsesAuthenticatedTenant_NotSpoofable
 
 	// The creating tenant's own key reads it back: proves the row really
 	// was persisted under THAT tenant's authenticated identity.
-	resp, body = doRequest(t, app, http.MethodGet, "/payments/"+created.PaymentID, tenant2Key, "", nil)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("creating tenant reading back its own payment: status = %d, body = %s", resp.StatusCode, body)
+	status, body = doRequest(t, app, http.MethodGet, "/payments/"+created.PaymentID, tenant2Key, "", nil)
+	if status != http.StatusOK {
+		t.Fatalf("creating tenant reading back its own payment: status = %d, body = %s", status, body)
 	}
 
 	// An unrelated tenant's key cannot -- confirms the payment is not
 	// visible/owned by "attacker-controlled-tenant" or anyone but the
 	// authenticated creator.
-	resp, body = doRequest(t, app, http.MethodGet, "/payments/"+created.PaymentID, otherTenantKey, "", nil)
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("unrelated tenant reading tenant2's payment: status = %d, body = %s, want %d", resp.StatusCode, body, http.StatusNotFound)
+	status, body = doRequest(t, app, http.MethodGet, "/payments/"+created.PaymentID, otherTenantKey, "", nil)
+	if status != http.StatusNotFound {
+		t.Fatalf("unrelated tenant reading tenant2's payment: status = %d, body = %s, want %d", status, body, http.StatusNotFound)
 	}
 }
 
@@ -244,8 +249,8 @@ func TestREST_HealthAndReadyz_RemainUnauthenticated(t *testing.T) {
 	pool := testPool(t)
 	app, _ := newTestAppAndStore(t, pool)
 
-	resp, body := doRequest(t, app, http.MethodGet, "/healthz", "", "", nil)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /healthz with no X-Api-Key: status = %d, body = %s, want %d", resp.StatusCode, body, http.StatusOK)
+	status, body := doRequest(t, app, http.MethodGet, "/healthz", "", "", nil)
+	if status != http.StatusOK {
+		t.Fatalf("GET /healthz with no X-Api-Key: status = %d, body = %s, want %d", status, body, http.StatusOK)
 	}
 }

@@ -151,9 +151,13 @@ func NewApp(deps Deps) *fiber.App {
 //
 // /readyz reports whether the process is ready to serve traffic: Postgres
 // and Redis must both be reachable.
+// keyStatus is the JSON key every /healthz and /readyz response reports its
+// outcome under.
+const keyStatus = "status"
+
 func RegisterHealthRoutes(app *fiber.App, deps Deps) {
 	app.Get("/healthz", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{"status": "ok"})
+		return c.JSON(fiber.Map{keyStatus: "ok"})
 	})
 
 	app.Get("/readyz", func(c *fiber.Ctx) error {
@@ -162,20 +166,20 @@ func RegisterHealthRoutes(app *fiber.App, deps Deps) {
 		if err := checkPostgres(ctx, deps.Pool); err != nil {
 			slog.Warn("[rest] RegisterHealthRoutes: readyz postgres not ready", "component", "rest", "error", err)
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
-				"status": "not ready",
-				"reason": "postgres",
+				keyStatus: "not ready",
+				"reason":  "postgres",
 			})
 		}
 
 		if err := checkRedis(deps.QueueClient); err != nil {
 			slog.Warn("[rest] RegisterHealthRoutes: readyz redis not ready", "component", "rest", "error", err)
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
-				"status": "not ready",
-				"reason": "redis",
+				keyStatus: "not ready",
+				"reason":  "redis",
 			})
 		}
 
-		return c.JSON(fiber.Map{"status": "ok"})
+		return c.JSON(fiber.Map{keyStatus: "ok"})
 	})
 }
 

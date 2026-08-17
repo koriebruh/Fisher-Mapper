@@ -217,12 +217,22 @@ type fileConfig struct {
 	} `toml:"cors"`
 }
 
+// defaultPostgresDSN matches docker-compose's throwaway local credentials,
+// not a real secret -- gosec's hardcoded-credential heuristic can't tell the
+// difference from a real password-in-URL. Pulled into its own named
+// constant (rather than nolint'ing the field inline) because gosec's G101
+// reports the position of the enclosing composite literal, not the string
+// literal itself, so an inline //nolint on the field doesn't line up.
+//
+//nolint:gosec // local dev default, matches docker-compose.yml
+const defaultPostgresDSN = "postgres://fisher:fisher@localhost:5432/fisher_mapper?sslmode=disable"
+
 // defaultBootstrap must be enough on its own for the server to start against
 // a local docker-compose stack with zero external configuration.
 func defaultBootstrap() Bootstrap {
 	return Bootstrap{
 		Postgres: Postgres{
-			DSN: "postgres://fisher:fisher@localhost:5432/fisher_mapper?sslmode=disable",
+			DSN: defaultPostgresDSN,
 		},
 		Redis: Redis{
 			Addr: "localhost:6379",
@@ -445,7 +455,7 @@ const (
 	EnvCORSAllowMethods     = "APP_CORS_ALLOW_METHODS"
 	EnvCORSAllowHeaders     = "APP_CORS_ALLOW_HEADERS"
 	EnvCORSExposeHeaders    = "APP_CORS_EXPOSE_HEADERS"
-	EnvCORSAllowCredentials = "APP_CORS_ALLOW_CREDENTIALS"
+	EnvCORSAllowCredentials = "APP_CORS_ALLOW_CREDENTIALS" //nolint:gosec // env var NAME, not a credential value -- gosec's name-pattern match on "credentials" is a false positive here
 	EnvCORSMaxAgeSeconds    = "APP_CORS_MAX_AGE_SECONDS"
 )
 

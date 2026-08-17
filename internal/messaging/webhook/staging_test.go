@@ -123,14 +123,14 @@ func TestJoin_AppliesStagedEventOnceMatchingPaymentExists(t *testing.T) {
 	var appliedWith provider.WebhookEvent
 	var applyCalls int
 
-	parse := func(_ context.Context, raw []byte) (provider.WebhookEvent, error) {
+	parse := func(_ context.Context, _ []byte) (provider.WebhookEvent, error) {
 		return provider.WebhookEvent{
 			ProviderEventID: eventID,
 			ProviderRef:     providerRef,
 			Status:          provider.StatusSucceeded,
 		}, nil
 	}
-	apply := func(_ context.Context, name string, evt provider.WebhookEvent) error {
+	apply := func(_ context.Context, _ string, evt provider.WebhookEvent) error {
 		applyCalls++
 		appliedWith = evt
 		return nil

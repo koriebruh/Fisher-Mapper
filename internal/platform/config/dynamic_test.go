@@ -23,7 +23,7 @@ type fakeConfigSource struct {
 	lastErr error
 }
 
-func (f *fakeConfigSource) GetAll(ctx context.Context) (map[string]string, error) {
+func (f *fakeConfigSource) GetAll(_ context.Context) (map[string]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++

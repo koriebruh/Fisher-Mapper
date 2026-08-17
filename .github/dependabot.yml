@@ -1,0 +1,20 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      # Bundle routine patch/minor bumps into one PR instead of one-per-
+      # dependency -- a major bump still gets its own PR (excluded below)
+      # since those are the ones actually worth reviewing individually.
+      go-dependencies:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
