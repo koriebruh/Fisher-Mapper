@@ -36,17 +36,20 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # v3 is the current major version of the CodeQL action family (init/
-      # autobuild/analyze/upload-sarif all move together) -- pinned to the
-      # exact minor.patch actually validated here, same discipline as every
-      # other tool in this pipeline (golangci-lint-action, gosec, buf).
+      # v4 is the current major version of the CodeQL action family (init/
+      # autobuild/analyze/upload-sarif all move together) -- v3 is already
+      # flagged for deprecation in December 2026 (see the existing `security`
+      # job's own upload-sarif@v3 step, which prints that warning on every
+      # run). Pinned to the exact minor.patch actually validated here, same
+      # discipline as every other tool in this pipeline (golangci-lint-action,
+      # gosec, buf).
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3.37.7
+        uses: github/codeql-action/init@v4.37.7
         with:
           languages: go
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@v3.37.7
+        uses: github/codeql-action/autobuild@v4.37.7
 
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@v3.37.7
+        uses: github/codeql-action/analyze@v4.37.7

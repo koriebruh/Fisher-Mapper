@@ -361,17 +361,25 @@ jobs:
       # run without `if: always()`, but the SARIF file itself wouldn't
       # exist yet if THIS step is what fails). Scan #1 always produces the
       # report; scan #2 is the strict gate.
+      # trivy-action's own `version` input pins the trivy SCANNER binary it
+      # fetches -- pinning the action alone (0.35.0 above) does not pin this;
+      # left as the action's own floating default, this job's pass/fail would
+      # depend on whatever trivy release exists on the day it runs, the exact
+      # failure mode ci.yml's golangci-lint-action comment already warns
+      # about. v0.69.3 is trivy-action@0.35.0's own tested default, pinned
+      # explicitly here rather than left implicit.
       - name: Trivy scan (report)
         uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: fisher-mapper-${{ matrix.target }}:ci
+          version: v0.69.3
           format: sarif
           output: trivy-${{ matrix.target }}-results.sarif
           severity: CRITICAL,HIGH
           exit-code: 0
 
       - name: Upload trivy SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4.37.7
         if: always()
         with:
           sarif_file: trivy-${{ matrix.target }}-results.sarif
@@ -384,6 +392,7 @@ jobs:
         uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: fisher-mapper-${{ matrix.target }}:ci
+          version: v0.69.3
           format: table
           severity: CRITICAL,HIGH
           exit-code: 1

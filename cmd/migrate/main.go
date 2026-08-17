@@ -68,6 +68,16 @@ func run(ctx context.Context, logger *slog.Logger, down bool, createTenantKey st
 		if err != nil {
 			return fmt.Errorf("create tenant key: %w", err)
 		}
+		// This is the intended, one-time display of a freshly generated
+		// credential to the operator's terminal -- see tenantauth.CreateKey's
+		// own doc comment: there is no other channel to retrieve the
+		// plaintext key, and -create-tenant-key's entire purpose is showing
+		// it once so an operator can copy it out. CodeQL's go/clear-text-
+		// logging flags this generically (fmt.Println of "sensitive" data);
+		// the real mitigation here is operational, not code-level -- don't
+		// run this flag in a context where stdout gets captured by a
+		// persistent log (CI output, systemd journal, etc).
+		// codeql[go/clear-text-logging]
 		fmt.Println(apiKey)
 		return nil
 	}
