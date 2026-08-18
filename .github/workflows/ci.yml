@@ -319,9 +319,15 @@ jobs:
           go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
           gosec -exclude-generated -fmt sarif -out gosec-results.sarif ./...
 
+      # v4.37.7 (matching codeql.yml/the docker job's trivy upload, not the
+      # v3 this step started on -- codeql-action v3 is deprecating Dec 2026).
+      # continue-on-error: same transient-5xx reasoning as the docker job's
+      # trivy upload -- an ingestion hiccup on informational Security-tab
+      # findings must never fail an otherwise-clean govulncheck+gosec scan.
       - name: Upload gosec SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4.37.7
         if: always()
+        continue-on-error: true
         with:
           sarif_file: gosec-results.sarif
 
@@ -378,9 +384,17 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: 0
 
+      # continue-on-error: GitHub's SARIF-ingestion endpoint has been
+      # observed returning transient 5xx errors independent of this repo
+      # (hit this same endpoint on the unrelated `security` job's gosec
+      # upload too) -- an ingestion hiccup uploading INFORMATIONAL findings
+      # to the Security tab must never fail an otherwise-clean scan. The
+      # real pass/fail signal is "Trivy scan (gate)" below, unaffected by
+      # this.
       - name: Upload trivy SARIF
         uses: github/codeql-action/upload-sarif@v4.37.7
         if: always()
+        continue-on-error: true
         with:
           sarif_file: trivy-${{ matrix.target }}-results.sarif
           category: trivy-${{ matrix.target }}
