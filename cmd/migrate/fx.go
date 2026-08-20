@@ -18,46 +18,66 @@ import (
 const migrationsDir = "internal/platform/db/migrations"
 
 // downFlag/createTenantKeyFlag wrap the CLI flags as distinct types so dig
-// never confuses them with any other provided string/bool.
+// never confuses them with any other supplied string/bool.
 type downFlag bool
 type createTenantKeyFlag string
 
-func provideLogger() *slog.Logger {
+func newLogger() *slog.Logger {
 	logger := observability.NewLogger("info")
 	slog.SetDefault(logger)
 	return logger
 }
 
-func provideConfig() (config.Bootstrap, error) {
+// loadConfig and connectPool run as plain function calls in main(), BEFORE
+// fx.New -- not as fx.Provide constructors. Both are one-shot,
+// failure-prone bootstrap steps; routing them through dig's dependency
+// resolution would prefix their error messages with dig's own
+// "could not build arguments for function ..." wrapper text, which is a
+// real change to what gets logged on a bad DSN or malformed config.toml (a
+// scenario this CLI is explicitly expected to fail loudly and cleanly on).
+// Calling them directly preserves the exact original single-line error
+// messages. fx still owns everything downstream: pool cleanup via
+// fx.Lifecycle (registerPoolCleanup) and process exit via fx.Shutdowner
+// (runMigrate).
+func loadConfig() (config.Bootstrap, error) {
 	config.LoadDotEnv()
 	return config.Load(configPath())
 }
 
-func providePool(cfg config.Bootstrap, lc fx.Lifecycle) (*pgxpool.Pool, error) {
-	pool, err := db.NewPool(context.Background(), cfg.Postgres.DSN)
-	if err != nil {
-		return nil, fmt.Errorf("connect postgres: %w", err)
-	}
+func connectPool(cfg config.Bootstrap) (*pgxpool.Pool, error) {
+	return db.NewPool(context.Background(), cfg.Postgres.DSN)
+}
+
+func registerPoolCleanup(lc fx.Lifecycle, pool *pgxpool.Pool) {
 	lc.Append(fx.Hook{
 		OnStop: func(context.Context) error {
 			pool.Close()
 			return nil
 		},
 	})
-	return pool, nil
 }
 
-// runMigrate is the sole fx.Invoke: this is a one-shot CLI, not a
-// long-running server, so there is nothing to wait for a signal on. It
-// registers an OnStart hook that does the real work, then always calls
-// Shutdowner -- app.Run() (see main.go) blocks until that call, runs OnStop
-// (pool.Close), then exits with the given code. This is fx's documented
-// pattern for short-lived applications.
+// runMigrate is the sole fx.Invoke that does real work: this is a one-shot
+// CLI, not a long-running server, so there is nothing to wait for a signal
+// on. It registers an OnStart hook that does the migrate/rollback/
+// create-tenant-key work, then always calls Shutdowner -- app.Run() (see
+// main.go) blocks until that call, runs OnStop (pool cleanup), then exits
+// with the given code. This is fx's documented pattern for short-lived
+// applications.
+//
+// The OnStart hook deliberately uses context.Background() for the actual
+// work, NOT the ctx fx passes in: fx.App wraps Start() in its own internal
+// StartTimeout (15s by default, see fx.DefaultTimeout), and a real
+// migration (a large ALTER TABLE, an index build, a backfill) can validly
+// take longer than that. The original pre-fx code had no such ceiling
+// (context.Background() throughout); using fx's ctx here would silently
+// impose one and cancel a legitimate long-running migration mid-flight,
+// skipping OnStop (pool cleanup) entirely when it fired.
 func runMigrate(lc fx.Lifecycle, sh fx.Shutdowner, logger *slog.Logger, pool *pgxpool.Pool, down downFlag, createTenantKey createTenantKeyFlag) {
 	lc.Append(fx.Hook{
-		OnStart: func(ctx context.Context) error {
+		OnStart: func(context.Context) error {
 			exitCode := 0
-			if err := doMigrate(ctx, logger, pool, bool(down), string(createTenantKey)); err != nil {
+			if err := doMigrate(context.Background(), logger, pool, bool(down), string(createTenantKey)); err != nil {
 				logger.Error(err.Error())
 				exitCode = 1
 			}
