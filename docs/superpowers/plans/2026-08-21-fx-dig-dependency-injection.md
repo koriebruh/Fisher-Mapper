@@ -19,6 +19,7 @@
 - `oklog/run` is removed from `cmd/server` and `cmd/worker` entirely (`fx.App.Run()` installs its own SIGINT/SIGTERM handler, replacing `run.SignalHandler`). `cmd/migrate` is a one-shot CLI, not a server — it uses `fx.Shutdowner` from inside an `fx.Lifecycle.OnStart` hook to end the process once the migration work is done, then `app.Run()` runs the queued `OnStop` hooks and exits. This is fx's documented pattern for short-lived applications.
 - `fx.Lifecycle` and `fx.Shutdowner` are built into every `fx.App` automatically — never `fx.Provide`/`fx.Supply` them.
 - `fx.NopLogger` is passed to every `fx.New(...)` call to suppress fx's own constructor/invoke event log (this project logs via `slog`; fx's default event logger would otherwise print unrelated startup noise to stdout).
+- `fx.App` bounds `Start()`/`Stop()` themselves with an internal timeout (`fx.DefaultTimeout`, 15s) — this applies to the call, not to what an `fx.Lifecycle.OnStart`/`OnStop` hook's own code internally chooses as its `ctx`. Any hook (or `fx.Invoke` executed while resolving one) that does variable-duration or potentially-long-running work must not run inside that window. This does not affect Tasks 3/4: `fxbridge.Bridge`'s `OnStart` only launches a goroutine and returns immediately, so the actual long-running actor work (fiber/grpc/relay/etc.) happens entirely outside fx's Start/Stop timing regardless of how long the process runs afterward. It matters for Task 2 specifically, where the original template put the actual migration work inside the hook itself — see that task's Amendment note.
 
 ## File Structure
 
@@ -118,6 +119,8 @@ git commit -m "build: add go.uber.org/fx, add fxbridge actor adapter"
 - Consumes: `config.Load`, `config.LoadDotEnv`, `db.NewPool`, `db.NewMigrationHandle`, `db.RunMigrations`, `db.RollbackLastMigration`, `observability.NewLogger`, `tenantauth.NewStore(pool).CreateKey` — all unchanged, called from the same places, just moved into constructor functions.
 - Produces: nothing consumed by other tasks (a fully separate binary).
 
+> **Amendment (post-implementation):** the task review caught a real defect in this task's original code template — `fx.App` bounds `Start()` itself with an internal `StartTimeout` (15s default), independent of what `ctx` an `OnStart` hook's own code uses internally. Putting `doMigrate` inside an `OnStart` hook (as originally written here, driven by `fx.Shutdowner` + `app.Run()`) meant any migration running ≥15s would be force-truncated with `pool.Close()` never running. The corrected design below removes `doMigrate` from fx's Start/Stop timing entirely: fx now owns only pool-cleanup ordering (`fx.Lifecycle`, via `registerPoolCleanup`), driven by `main()` calling `app.Start()`/`app.Stop()` manually — `doMigrate` runs as a plain statement in `main()`, between those two calls, fully unbounded. `fx.Shutdowner` and `app.Run()` are not used in this binary. See the plan's ledger (`.superpowers/sdd/2026-08-21-fx-dig-dependency-injection/progress.md`) for the full ruling. The code below reflects the corrected, as-implemented design.
+
 - [ ] **Step 1: Write `cmd/migrate/fx.go`**
 
 ```go
@@ -140,51 +143,40 @@ import (
 
 const migrationsDir = "internal/platform/db/migrations"
 
-// downFlag/createTenantKeyFlag wrap the CLI flags as distinct types so dig
-// never confuses them with any other provided string/bool.
-type downFlag bool
-type createTenantKeyFlag string
-
-func provideLogger() *slog.Logger {
+func newLogger() *slog.Logger {
 	logger := observability.NewLogger("info")
 	slog.SetDefault(logger)
 	return logger
 }
 
-func provideConfig() (config.Bootstrap, error) {
+// loadConfig and connectPool run as plain function calls in main(), BEFORE
+// fx.New -- not as fx.Provide constructors. Both are one-shot,
+// failure-prone bootstrap steps; routing them through dig's dependency
+// resolution would prefix their error messages with dig's own
+// "could not build arguments for function ..." wrapper text instead of the
+// original clean single-line message. fx's role in this binary is
+// deliberately narrow: pool cleanup ordering via fx.Lifecycle
+// (registerPoolCleanup) -- the actual migrate/rollback/create-tenant-key
+// work runs as a plain call in main(), between app.Start() and app.Stop(),
+// for the same reason: fx.App bounds OnStart/OnStop hooks (and Start/Stop
+// themselves) with its own internal timeouts (15s default each), and a
+// real migration can validly run far longer than that. There is no
+// fx.Invoke (or fx.Lifecycle.OnStart) doing real work anywhere in this
+// file.
+func loadConfig() (config.Bootstrap, error) {
 	config.LoadDotEnv()
 	return config.Load(configPath())
 }
 
-func providePool(cfg config.Bootstrap, lc fx.Lifecycle) (*pgxpool.Pool, error) {
-	pool, err := db.NewPool(context.Background(), cfg.Postgres.DSN)
-	if err != nil {
-		return nil, fmt.Errorf("connect postgres: %w", err)
-	}
+func connectPool(cfg config.Bootstrap) (*pgxpool.Pool, error) {
+	return db.NewPool(context.Background(), cfg.Postgres.DSN)
+}
+
+func registerPoolCleanup(lc fx.Lifecycle, pool *pgxpool.Pool) {
 	lc.Append(fx.Hook{
 		OnStop: func(context.Context) error {
 			pool.Close()
 			return nil
-		},
-	})
-	return pool, nil
-}
-
-// runMigrate is the sole fx.Invoke: this is a one-shot CLI, not a
-// long-running server, so there is nothing to wait for a signal on. It
-// registers an OnStart hook that does the real work, then always calls
-// Shutdowner -- app.Run() (see main.go) blocks until that call, runs OnStop
-// (pool.Close), then exits with the given code. This is fx's documented
-// pattern for short-lived applications.
-func runMigrate(lc fx.Lifecycle, sh fx.Shutdowner, logger *slog.Logger, pool *pgxpool.Pool, down downFlag, createTenantKey createTenantKeyFlag) {
-	lc.Append(fx.Hook{
-		OnStart: func(ctx context.Context) error {
-			exitCode := 0
-			if err := doMigrate(ctx, logger, pool, bool(down), string(createTenantKey)); err != nil {
-				logger.Error(err.Error())
-				exitCode = 1
-			}
-			return sh.Shutdown(fx.ExitCode(exitCode))
 		},
 	})
 }
@@ -244,16 +236,22 @@ func configPath() string {
 // is a deliberate operator action, not something the request-serving
 // process should trigger implicitly on every boot.
 //
-// Wiring (config -> pool -> migrate-or-rollback-or-create-key) is built as
-// an fx dependency graph -- see fx.go. This is a one-shot CLI, so it uses
-// fx.Shutdowner from inside an OnStart hook to end the process rather than
-// fx.App.Run()'s normal wait-for-SIGINT/SIGTERM behavior.
+// fx's role here is deliberately narrow -- see fx.go's doc on
+// loadConfig/connectPool for why config/pool construction and the actual
+// migration work are plain function calls rather than fx.Provide/fx.Invoke:
+// fx.App's own internal Start/Stop timeouts (15s default) would otherwise
+// silently bound a migration's runtime. fx is used only for pool cleanup
+// ordering (fx.Lifecycle, via registerPoolCleanup), driven manually with
+// app.Start()/app.Stop() rather than app.Run() (which waits for a
+// SIGINT/SIGTERM this one-shot CLI never receives).
 package main
 
 import (
+	"context"
 	"flag"
-	"log/slog"
+	"fmt"
 	"os"
+	"time"
 
 	"go.uber.org/fx"
 )
@@ -263,18 +261,50 @@ func main() {
 	createTenantKey := flag.String("create-tenant-key", "", "generate a tenant_api_keys row for this tenant_id, print the new key to stdout, then exit (no migrations run)")
 	flag.Parse()
 
-	app := fx.New(
-		fx.Supply(downFlag(*down), createTenantKeyFlag(*createTenantKey)),
-		fx.Provide(provideLogger, provideConfig, providePool),
-		fx.Invoke(runMigrate),
-		fx.NopLogger,
-	)
+	logger := newLogger()
 
-	if err := app.Err(); err != nil {
-		slog.Error(err.Error())
+	cfg, err := loadConfig()
+	if err != nil {
+		logger.Error(fmt.Errorf("load bootstrap config: %w", err).Error())
 		os.Exit(1)
 	}
-	app.Run()
+
+	pool, err := connectPool(cfg)
+	if err != nil {
+		logger.Error(fmt.Errorf("connect postgres: %w", err).Error())
+		os.Exit(1)
+	}
+
+	app := fx.New(
+		fx.Supply(pool),
+		fx.Invoke(registerPoolCleanup),
+		fx.NopLogger,
+	)
+	if err := app.Err(); err != nil {
+		logger.Error(err.Error())
+		os.Exit(1)
+	}
+
+	startCtx, cancelStart := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelStart()
+	if err := app.Start(startCtx); err != nil {
+		logger.Error(err.Error())
+		os.Exit(1)
+	}
+
+	exitCode := 0
+	if err := doMigrate(context.Background(), logger, pool, *down, *createTenantKey); err != nil {
+		logger.Error(err.Error())
+		exitCode = 1
+	}
+
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelStop()
+	if err := app.Stop(stopCtx); err != nil {
+		logger.Warn("shutdown fx app", "error", err)
+	}
+
+	os.Exit(exitCode)
 }
 ```
 
@@ -291,7 +321,7 @@ go run ./cmd/migrate
 go run ./cmd/migrate -down
 go run ./cmd/migrate -create-tenant-key smoke-test-tenant
 ```
-Expected: identical output/behavior to before this change — "migrations applied" / "last migration rolled back" / a printed API key — and exit code 0 in each case. Try an invalid DSN (e.g. `APP_CONFIG_FILE` pointing at a config with a bad `postgres.dsn`) and confirm the process still prints the connect error and exits 1.
+Expected: identical output/behavior to before this change — "migrations applied" / "last migration rolled back" / a printed API key — and exit code 0 in each case. Try an invalid DSN (e.g. `APP_CONFIG_FILE` pointing at a config with a bad `postgres.dsn`) and confirm the process still prints a single clean "connect postgres: ..." line (no dig-wrapper text) and exits 1.
 
 - [ ] **Step 5: Commit**
 
