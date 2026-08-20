@@ -17,11 +17,6 @@ import (
 
 const migrationsDir = "internal/platform/db/migrations"
 
-// downFlag/createTenantKeyFlag wrap the CLI flags as distinct types so dig
-// never confuses them with any other supplied string/bool.
-type downFlag bool
-type createTenantKeyFlag string
-
 func newLogger() *slog.Logger {
 	logger := observability.NewLogger("info")
 	slog.SetDefault(logger)
@@ -32,13 +27,15 @@ func newLogger() *slog.Logger {
 // fx.New -- not as fx.Provide constructors. Both are one-shot,
 // failure-prone bootstrap steps; routing them through dig's dependency
 // resolution would prefix their error messages with dig's own
-// "could not build arguments for function ..." wrapper text, which is a
-// real change to what gets logged on a bad DSN or malformed config.toml (a
-// scenario this CLI is explicitly expected to fail loudly and cleanly on).
-// Calling them directly preserves the exact original single-line error
-// messages. fx still owns everything downstream: pool cleanup via
-// fx.Lifecycle (registerPoolCleanup) and process exit via fx.Shutdowner
-// (runMigrate).
+// "could not build arguments for function ..." wrapper text instead of the
+// original clean single-line message. fx's role in this binary is
+// deliberately narrow: pool cleanup ordering via fx.Lifecycle
+// (registerPoolCleanup) -- the actual migrate/rollback/create-tenant-key
+// work runs as a plain call in main(), between app.Start() and app.Stop(),
+// for the same reason: fx.App bounds OnStart/OnStop hooks with its own
+// internal StartTimeout/StopTimeout (15s default each), and a real
+// migration can validly run far longer than that. There is no fx.Invoke
+// (or fx.Lifecycle.OnStart) doing real work anywhere in this file.
 func loadConfig() (config.Bootstrap, error) {
 	config.LoadDotEnv()
 	return config.Load(configPath())
@@ -53,35 +50,6 @@ func registerPoolCleanup(lc fx.Lifecycle, pool *pgxpool.Pool) {
 		OnStop: func(context.Context) error {
 			pool.Close()
 			return nil
-		},
-	})
-}
-
-// runMigrate is the sole fx.Invoke that does real work: this is a one-shot
-// CLI, not a long-running server, so there is nothing to wait for a signal
-// on. It registers an OnStart hook that does the migrate/rollback/
-// create-tenant-key work, then always calls Shutdowner -- app.Run() (see
-// main.go) blocks until that call, runs OnStop (pool cleanup), then exits
-// with the given code. This is fx's documented pattern for short-lived
-// applications.
-//
-// The OnStart hook deliberately uses context.Background() for the actual
-// work, NOT the ctx fx passes in: fx.App wraps Start() in its own internal
-// StartTimeout (15s by default, see fx.DefaultTimeout), and a real
-// migration (a large ALTER TABLE, an index build, a backfill) can validly
-// take longer than that. The original pre-fx code had no such ceiling
-// (context.Background() throughout); using fx's ctx here would silently
-// impose one and cancel a legitimate long-running migration mid-flight,
-// skipping OnStop (pool cleanup) entirely when it fired.
-func runMigrate(lc fx.Lifecycle, sh fx.Shutdowner, logger *slog.Logger, pool *pgxpool.Pool, down downFlag, createTenantKey createTenantKeyFlag) {
-	lc.Append(fx.Hook{
-		OnStart: func(context.Context) error {
-			exitCode := 0
-			if err := doMigrate(context.Background(), logger, pool, bool(down), string(createTenantKey)); err != nil {
-				logger.Error(err.Error())
-				exitCode = 1
-			}
-			return sh.Shutdown(fx.ExitCode(exitCode))
 		},
 	})
 }

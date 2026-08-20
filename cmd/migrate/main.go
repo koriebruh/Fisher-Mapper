@@ -7,18 +7,22 @@
 // is a deliberate operator action, not something the request-serving
 // process should trigger implicitly on every boot.
 //
-// Config loading and pool construction happen as plain function calls
-// below, before fx.New -- see loadConfig/connectPool's doc in fx.go for
-// why. Everything downstream (pool cleanup, process exit) is wired as an
-// fx dependency graph -- see fx.go. This is a one-shot CLI, so it uses
-// fx.Shutdowner from inside an OnStart hook to end the process rather than
-// fx.App.Run()'s normal wait-for-SIGINT/SIGTERM behavior.
+// fx's role here is deliberately narrow -- see fx.go's doc on
+// loadConfig/connectPool for why config/pool construction and the actual
+// migration work are plain function calls rather than fx.Provide/fx.Invoke:
+// fx.App's own internal Start/Stop timeouts (15s default) would otherwise
+// silently bound a migration's runtime and its error messages. fx is used
+// only for pool cleanup ordering (fx.Lifecycle, via registerPoolCleanup),
+// driven manually with app.Start()/app.Stop() rather than app.Run() (which
+// waits for a SIGINT/SIGTERM this one-shot CLI never receives).
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"go.uber.org/fx"
 )
@@ -43,14 +47,33 @@ func main() {
 	}
 
 	app := fx.New(
-		fx.Supply(logger, pool, downFlag(*down), createTenantKeyFlag(*createTenantKey)),
-		fx.Invoke(registerPoolCleanup, runMigrate),
+		fx.Supply(pool),
+		fx.Invoke(registerPoolCleanup),
 		fx.NopLogger,
 	)
-
 	if err := app.Err(); err != nil {
 		logger.Error(err.Error())
 		os.Exit(1)
 	}
-	app.Run()
+
+	startCtx, cancelStart := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelStart()
+	if err := app.Start(startCtx); err != nil {
+		logger.Error(err.Error())
+		os.Exit(1)
+	}
+
+	exitCode := 0
+	if err := doMigrate(context.Background(), logger, pool, *down, *createTenantKey); err != nil {
+		logger.Error(err.Error())
+		exitCode = 1
+	}
+
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelStop()
+	if err := app.Stop(stopCtx); err != nil {
+		logger.Warn("shutdown fx app", "error", err)
+	}
+
+	os.Exit(exitCode)
 }
