@@ -16,8 +16,11 @@ import (
 // startup on it), so execute -- normally blocking, e.g. app.Listen -- cannot
 // run inline. If execute returns a non-nil error (the actor crashed rather
 // than shutting down cleanly), sh.Shutdown reports it to fx so the whole app
-// exits with a non-zero code, matching oklog/run.Group's "any actor's
-// execute() returning stops every actor" behavior.
+// exits with a non-zero code. Unlike oklog/run.Group, a clean (nil-error)
+// return from execute does NOT by itself trigger a shutdown here -- fx.App
+// already owns signal-triggered shutdown, and every actor in
+// internal/platform/lifecycle only returns nil as a result of interrupt
+// having already run, never as its own trigger.
 func Bridge(lc fx.Lifecycle, sh fx.Shutdowner, execute func() error, interrupt func(error)) {
 	lc.Append(fx.Hook{
 		OnStart: func(context.Context) error {
