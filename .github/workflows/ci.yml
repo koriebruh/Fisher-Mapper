@@ -375,7 +375,7 @@ jobs:
       # about. v0.69.3 is trivy-action@0.35.0's own tested default, pinned
       # explicitly here rather than left implicit.
       - name: Trivy scan (report)
-        uses: aquasecurity/trivy-action@0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: fisher-mapper-${{ matrix.target }}:ci
           version: v0.69.3
@@ -403,7 +403,7 @@ jobs:
       # passed" philosophy -- a real CRITICAL/HIGH vuln fails the job, not
       # just gets silently recorded in the Security tab for later.
       - name: Trivy scan (gate)
-        uses: aquasecurity/trivy-action@0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: fisher-mapper-${{ matrix.target }}:ci
           version: v0.69.3
