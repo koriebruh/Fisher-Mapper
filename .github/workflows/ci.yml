@@ -325,7 +325,7 @@ jobs:
       # trivy upload -- an ingestion hiccup on informational Security-tab
       # findings must never fail an otherwise-clean govulncheck+gosec scan.
       - name: Upload gosec SARIF
-        uses: github/codeql-action/upload-sarif@v4.37.7
+        uses: github/codeql-action/upload-sarif@v4.37.8
         if: always()
         continue-on-error: true
         with:
@@ -392,7 +392,7 @@ jobs:
       # real pass/fail signal is "Trivy scan (gate)" below, unaffected by
       # this.
       - name: Upload trivy SARIF
-        uses: github/codeql-action/upload-sarif@v4.37.7
+        uses: github/codeql-action/upload-sarif@v4.37.8
         if: always()
         continue-on-error: true
         with:
