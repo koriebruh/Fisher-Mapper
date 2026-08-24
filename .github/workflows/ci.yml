@@ -344,7 +344,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: docker/setup-buildx-action@v3.12.0
+      - uses: docker/setup-buildx-action@v4.3.0
 
       # push: false (this repo isn't set up to push to a registry, that's
       # out of scope here -- this job only proves the image builds and
