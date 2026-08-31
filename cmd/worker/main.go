@@ -78,7 +78,7 @@ func main() {
 		// any remaining OnStop hooks (e.g. pool.Close()) rather than just
 		// running slow, unlike oklog/run.Group's interrupt() chain, which
 		// had no such ceiling.
-		fx.StopTimeout(60 * time.Second),
+		fx.StopTimeout(60*time.Second),
 	)
 
 	if err := app.Err(); err != nil {
