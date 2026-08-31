@@ -1,7 +1,9 @@
-// Package lifecycle wires long-running processes as oklog/run actors so
-// every actor (fiber server, grpc server, asynq worker, outbox relay
-// poller, dynamic-config watcher) shuts down deterministically on
-// SIGINT/SIGTERM. There is no "go func()" without an owning actor.
+// Package lifecycle provides (execute, interrupt) actor constructors for
+// long-running processes so every actor (fiber server, grpc server, asynq
+// worker, outbox relay poller, dynamic-config watcher) shuts down
+// deterministically on SIGINT/SIGTERM. Historically used by oklog/run.Group,
+// these actors are now integrated via internal/platform/fxbridge.Bridge.
+// There is no "go func()" without an owning actor.
 package lifecycle
 
 import (
