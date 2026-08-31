@@ -32,18 +32,25 @@ func main() {
 	createTenantKey := flag.String("create-tenant-key", "", "generate a tenant_api_keys row for this tenant_id, print the new key to stdout, then exit (no migrations run)")
 	flag.Parse()
 
+	// run() owns every defer (the Start/Stop timeout contexts' cancel funcs)
+	// so os.Exit -- which skips deferred calls -- only ever happens here,
+	// after they've already run.
+	os.Exit(run(*down, *createTenantKey))
+}
+
+func run(down bool, createTenantKey string) int {
 	logger := newLogger()
 
 	cfg, err := loadConfig()
 	if err != nil {
 		logger.Error(fmt.Errorf("load bootstrap config: %w", err).Error())
-		os.Exit(1)
+		return 1
 	}
 
 	pool, err := connectPool(cfg)
 	if err != nil {
 		logger.Error(fmt.Errorf("connect postgres: %w", err).Error())
-		os.Exit(1)
+		return 1
 	}
 
 	app := fx.New(
@@ -53,18 +60,18 @@ func main() {
 	)
 	if err := app.Err(); err != nil {
 		logger.Error(err.Error())
-		os.Exit(1)
+		return 1
 	}
 
 	startCtx, cancelStart := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelStart()
 	if err := app.Start(startCtx); err != nil {
 		logger.Error(err.Error())
-		os.Exit(1)
+		return 1
 	}
 
 	exitCode := 0
-	if err := doMigrate(context.Background(), logger, pool, *down, *createTenantKey); err != nil {
+	if err := doMigrate(context.Background(), logger, pool, down, createTenantKey); err != nil {
 		logger.Error(err.Error())
 		exitCode = 1
 	}
@@ -75,5 +82,5 @@ func main() {
 		logger.Warn("shutdown fx app", "error", err)
 	}
 
-	os.Exit(exitCode)
+	return exitCode
 }
