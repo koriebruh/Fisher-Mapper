@@ -55,7 +55,13 @@ func provideServiceName(cfg config.Bootstrap) ServiceName {
 	return ServiceName(cfg.Service.Name)
 }
 
-func provideDynamicSeed() (config.DynamicSeed, error) {
+// provideDynamicSeed takes config.Bootstrap as an unused parameter to force dig
+// to resolve provideConfig first. provideConfig has a side effect (LoadDotEnv)
+// that populates environment variables that configPath() reads (specifically APP_CONFIG_FILE).
+// Without this dependency, dig might resolve provideDynamicSeed before provideConfig,
+// causing configPath() to silently fall back to "config.toml" and LoadDynamicSeed
+// to return defaults, reverting several feature-flag defaults with no error.
+func provideDynamicSeed(_ config.Bootstrap) (config.DynamicSeed, error) {
 	return config.LoadDynamicSeed(configPath())
 }
 
@@ -269,16 +275,17 @@ func provideGRPCListener(cfg config.Bootstrap) (net.Listener, error) {
 	return (&net.ListenConfig{}).Listen(context.Background(), "tcp", grpcAddr)
 }
 
-// provideGRPCServer's final parameter is unused -- see provideMeterProvider's
-// doc; here it forces the global tracer provider (installed inside
-// provideObservability) to exist before otelgrpc.NewServerHandler resolves
-// it.
+// provideGRPCServer's unused parameters force dig to build provideObservability
+// and provideMeterProvider before resolving this constructor. Those functions
+// install the global tracer and meter providers as side effects; otelgrpc.NewServerHandler
+// (called below) snapshots both globals at construction time, so both must exist first.
 func provideGRPCServer(
 	paymentService *payment.Service,
 	limiter *ratelimit.Limiter,
 	rateLimitEnabled RateLimitEnabledFunc,
 	tenantAuthStore *tenantauth.Store,
 	_ bootstrap.Observability,
+	_ *sdkmetric.MeterProvider,
 ) *grpc.Server {
 	grpcServer := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),

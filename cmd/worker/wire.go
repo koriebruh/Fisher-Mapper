@@ -56,7 +56,13 @@ func provideServiceName(cfg config.Bootstrap) ServiceName {
 	return ServiceName(cfg.Service.Name + "-worker")
 }
 
-func provideDynamicSeed() (config.DynamicSeed, error) {
+// provideDynamicSeed takes config.Bootstrap as an unused parameter to force dig
+// to resolve provideConfig first. provideConfig has a side effect (LoadDotEnv)
+// that populates environment variables that configPath() reads (specifically APP_CONFIG_FILE).
+// Without this dependency, dig might resolve provideDynamicSeed before provideConfig,
+// causing configPath() to silently fall back to "config.toml" and LoadDynamicSeed
+// to return defaults, reverting several feature-flag defaults with no error.
+func provideDynamicSeed(_ config.Bootstrap) (config.DynamicSeed, error) {
 	return config.LoadDynamicSeed(configPath())
 }
 
